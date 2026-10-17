@@ -206,7 +206,11 @@ credentials, raw secret-bearing URLs or stack traces.
   in-progress retry). Messages rejected at admission, including unregistered
   private DMs and ignored groups, receive no reaction. A failed reaction is
   logged only; it does not change persist/dispatch, is not retried on the main
-  path, and is not a substitute for send-intent receipts.
+  path, and is not a substitute for send-intent receipts. Production reaction
+  promises are handed to `@vercel/functions` `waitUntil` on the Telegram webhook,
+  MCP dispatch/retry, and dot wake entries so Vercel does not freeze them after
+  the response. Tests wait with `waitInboundReactions()` instead of blocking the
+  handler.
 
 ## Private-DM live acceptance
 

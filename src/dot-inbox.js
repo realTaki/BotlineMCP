@@ -1,7 +1,7 @@
 import {hash,nonce,requireThat,signedHeaders} from './security.js';
 import {getAgent} from './agents.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
-import {INBOUND_REACTIONS,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
+import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 
 export const DOT_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,maxPageSize:100,wakeCooldown:30000,wakeLease:30000,maxAttempts:8};
 // Logical routing under the existing shared instance authority, not a new account.
@@ -100,10 +100,17 @@ export class DotInbox {
     const targets=[];
     if(accepted||exhausted){
      for(const d of await tx.list('dot_inbox',owner)){
-      if(d.agentId!==candidate.agentId||d.reaction==='delivered'||!(await this.allowed(d,tx)))continue;
+      if(d.agentId!==candidate.agentId||!(await this.allowed(d,tx)))continue;
       const target=telegramReactionTarget(d.event);if(!target)continue;
-      targets.push(target);
-      if(accepted)await tx.put('dot_inbox',d.id,{...d,reaction:'delivered'});
+      if(accepted){
+       if(d.reaction==='delivered')continue;
+       targets.push(target);
+       await tx.put('dot_inbox',d.id,{...d,reaction:'delivered'});
+      }else{
+       if(d.reaction==='failed'||d.reaction==='delivered')continue;
+       targets.push(target);
+       await tx.put('dot_inbox',d.id,{...d,reaction:'failed'});
+      }
      }
     }
     return {changed,accepted,exhausted,targets};
@@ -114,6 +121,7 @@ export class DotInbox {
    }
    if(outcome?.changed)candidates.push(candidate);
   }
+  holdInboundReactions(this.app);
  }
  async refresh(owner,agentId){
   await this.store.withLock('dms:'+owner,async tx=>{const wake=await tx.get('dot_wake',agentId);if(wake)await tx.put('dot_wake',agentId,{...wake,wakeId:null,attempts:0,exhausted:false,next:0});});

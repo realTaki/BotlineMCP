@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {Store} from '../src/store.js';
-import {App} from '../src/app.js';
+import {Readable} from 'node:stream';
+import {App,handler} from '../src/app.js';
 import {DotInbox,DOT_INBOX_POLICY} from '../src/dot-inbox.js';
 import {Dms,DM_POLICY} from '../src/dms.js';
 import {registerAgent} from '../src/agents.js';
@@ -282,5 +283,31 @@ test('dot inbound DMs react delivered after inbox.ready and failed after wake ex
  for(let i=1;i<8;i++){const wake=await fail.store.get('dot_wake',fail.dot.agentId);await fail.store.put('dot_wake',fail.dot.agentId,{...wake,next:0});await fail.g.dispatch(owner);}
  await waitInboundReactions();
  assert.deepEqual(reactionEmojis(fail.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.failed]);
- assert.equal((await fail.inbox.list(fail.dot)).messages.length,1);
+ assert.equal((await fail.store.list('dot_inbox'))[0].reaction,'failed');
+ await fail.app.receive('123','hook',{update_id:3,message:{message_id:10,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'second wake fails'}});
+ for(let i=1;i<8;i++){const wake=await fail.store.get('dot_wake',fail.dot.agentId);await fail.store.put('dot_wake',fail.dot.agentId,{...wake,next:0});await fail.g.dispatch(owner);}
+ await waitInboundReactions();
+ const failedIds=fail.telegram.filter(c=>c.method==='setMessageReaction'&&c.args.reaction[0].emoji===INBOUND_REACTIONS.failed).map(c=>c.args.message_id);
+ assert.deepEqual(failedIds,[9,10]);
+ fail.app.post=async(url,h,body)=>{const e=JSON.parse(body);return {status:200,body:JSON.stringify({challenge:e.challenge})};};
+ const wake=await fail.store.get('dot_wake',fail.dot.agentId);await fail.store.put('dot_wake',fail.dot.agentId,{...wake,exhausted:false,next:0,attempts:0});
+ await fail.g.dispatch(owner);await waitInboundReactions();
+ assert.deepEqual(fail.telegram.filter(c=>c.method==='setMessageReaction'&&c.args.reaction[0].emoji===INBOUND_REACTIONS.delivered).map(c=>c.args.message_id).sort((a,b)=>a-b),[9,10]);
+});
+
+test('Telegram webhook returns while waitUntil holds inbound reaction work',async()=>{
+ const f=await fixture();const dm=await boundBot(f,f.a.agentId);
+ const held=[];f.app.waitUntil=work=>held.push(work);
+ let release;const blocked=new Promise(r=>release=r);
+ const original=f.app.telegram;
+ f.app.telegram=async(t,method,args)=>{if(method==='setMessageReaction'){await blocked;f.telegram.push({method,args});return {ok:true};}return original(t,method,args);};
+ const req=Readable.from([JSON.stringify({update_id:1,message:dm})]);
+ Object.assign(req,{url:'/telegram/123',method:'POST',headers:{'x-telegram-bot-api-secret-token':'hook','content-type':'application/json'}});
+ let ended=false;const res={headers:{},setHeader(k,v){this.headers[k]=v;},end(b){ended=true;this.body=b??'';}};
+ await handler(f.app)(req,res);
+ assert.equal(ended,true);assert.equal(res.statusCode,200);assert.deepEqual(JSON.parse(res.body),{ok:true});
+ assert.equal(reactionEmojis(f.telegram).length,0);assert(held.length>=1);
+ let settled=false;Promise.all(held).then(()=>settled=true);await Promise.resolve();assert.equal(settled,false);
+ release();await Promise.all(held);await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received]);
 });

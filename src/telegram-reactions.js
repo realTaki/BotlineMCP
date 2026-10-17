@@ -1,4 +1,5 @@
-// Confirmed Telegram Bot API ReactionTypeEmoji values. 📥 and 📨 are not in that list.
+import {waitUntil as vercelWaitUntil} from '@vercel/functions';
+// Confirmed Telegram Bot API ReactionTypeEmoji values. 📥 and 📨 are not in the list.
 export const INBOUND_REACTIONS=Object.freeze({received:'🕊',delivered:'👀',failed:'💔'});
 const pending=new Map();
 
@@ -12,6 +13,18 @@ export function waitInboundReactions(){
  return pending.size?Promise.all([...pending.values()]):Promise.resolve();
 }
 
+function holdPromise(app,work){
+ const wait=typeof app?.waitUntil==='function'?app.waitUntil:vercelWaitUntil;
+ try{wait(work);}catch{}
+}
+
+export function holdInboundReactions(app){
+ if(!pending.size)return Promise.resolve();
+ const work=waitInboundReactions();
+ holdPromise(app,work);
+ return work;
+}
+
 export function inboundTelegramReaction(app,target,emoji){
  if(!target?.botId||target.chatId==null||!Number.isSafeInteger(target.messageId)||target.messageId<=0)return Promise.resolve();
  if(emoji!==INBOUND_REACTIONS.received&&emoji!==INBOUND_REACTIONS.delivered&&emoji!==INBOUND_REACTIONS.failed)return Promise.resolve();
@@ -20,6 +33,7 @@ export function inboundTelegramReaction(app,target,emoji){
  const next=(pending.get(key)??Promise.resolve()).then(run,run);
  pending.set(key,next);
  next.finally(()=>{if(pending.get(key)===next)pending.delete(key);});
+ holdPromise(app,next);
  return next;
 }
 

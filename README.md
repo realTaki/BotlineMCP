@@ -36,6 +36,8 @@ isolation or separate privilege levels. Do not expose this as a shared public se
   payload queued — the reaction becomes 👀. A terminal delivery failure becomes
   💔. Admission rejects and groups get no reaction. Reaction calls are
   opportunistic and log-only; they never retry in a way that blocks relay.
+  On Vercel the handler hands those promises to `waitUntil` so the function is
+  not frozen before Telegram sees the reaction.
 - **dot:** exactly handle `dot`, without a Grok Bot destination. One
   `agent.notification` subscription with empty arguments receives `inbox.ready`.
   The agent calls `messages_inbox`, processes each item and explicitly calls

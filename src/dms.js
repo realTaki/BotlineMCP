@@ -6,7 +6,7 @@ import {BotBindings} from './bots.js';
 import {RelayErrors,relayErrorDetails} from './relay-errors.js';
 import {getHuman,getHumanByTelegramId,listHumans} from './telegram-owner.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
-import {INBOUND_REACTIONS,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
+import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 const DAY=86400000;
 export const DM_POLICY={payloadTtl:DAY,receiptTtl:7*DAY,maxPending:512};
 const string={type:'string'};
@@ -158,6 +158,7 @@ export class Dms {
    if(!(status>=200&&status<300))try{const code=grokbot?status===409?'cursor_key_unreadable':'grokbot_delivery_failed':'relay_delivery_failed';error_notifications.push(await new RelayErrors(this.app).report({owner,agentId:d.agentId,code}));}catch{error_notifications.push({...relayErrorDetails('relay_delivery_failed'),notification:{agent:'unavailable',telegram:'unavailable'}});}
   }
   await new DotInbox(this.app).dispatch(owner,agentId=>this.inboxId(agentId));
+  holdInboundReactions(this.app);
   return {failed_event_ids,error_notifications};
  }
 }
