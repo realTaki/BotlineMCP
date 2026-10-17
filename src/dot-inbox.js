@@ -1,6 +1,7 @@
 import {hash,nonce,requireThat,signedHeaders} from './security.js';
 import {getAgent} from './agents.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
+import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 
 export const DOT_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,maxPageSize:100,wakeCooldown:30000,wakeLease:30000,maxAttempts:8};
 // Logical routing under the existing shared instance authority, not a new account.
@@ -90,14 +91,37 @@ export class DotInbox {
    const eventId=wake.wakeId,body=JSON.stringify({eventId,name:'agent.notification',timestamp:new Date().toISOString(),data:{type:'inbox.ready'},cursor:null});
    let status=0;
    try{const headers=signedHeaders(this.app.decrypt(sub.secret),id,eventId,body);if(sub.oldSecret&&sub.rotateUntil>Date.now())headers['webhook-signature']+=' '+signedHeaders(this.app.decrypt(sub.oldSecret),id,eventId,body,Number(headers['webhook-timestamp']))['webhook-signature'];status=(await this.app.post(sub.url,headers,body)).status;}catch{}
-   const changedDuringWake=await this.store.withLock('dms:'+owner,async tx=>{
+   const outcome=await this.store.withLock('dms:'+owner,async tx=>{
     const current=await tx.get('dot_wake',candidate.agentId);if(current?.token!==token)return;
     const drained=!(await tx.list('dot_inbox',owner)).some(d=>d.agentId===candidate.agentId&&d.expires>Date.now());
     const changed=current.sequence!==wake.sequence,accepted=status>=200&&status<300,attempts=changed?0:(current.attempts??0)+1;
-    await tx.put('dot_wake',candidate.agentId,{...current,token:null,wakeId:accepted||changed?null:current.wakeId,leaseUntil:0,attempts:accepted?0:attempts,lastStatus:status,exhausted:!accepted&&!changed&&attempts>=DOT_INBOX_POLICY.maxAttempts,next:changed||drained?0:Date.now()+(accepted?DOT_INBOX_POLICY.wakeCooldown:Math.min(300000,1000*2**attempts))});return changed;
+    const exhausted=!accepted&&!changed&&attempts>=DOT_INBOX_POLICY.maxAttempts;
+    await tx.put('dot_wake',candidate.agentId,{...current,token:null,wakeId:accepted||changed?null:current.wakeId,leaseUntil:0,attempts:accepted?0:attempts,lastStatus:status,exhausted,next:changed||drained?0:Date.now()+(accepted?DOT_INBOX_POLICY.wakeCooldown:Math.min(300000,1000*2**attempts))});
+    const targets=[];
+    if(accepted||exhausted){
+     for(const d of await tx.list('dot_inbox',owner)){
+      if(d.agentId!==candidate.agentId||!(await this.allowed(d,tx)))continue;
+      const target=telegramReactionTarget(d.event);if(!target)continue;
+      if(accepted){
+       if(d.reaction==='delivered')continue;
+       targets.push(target);
+       await tx.put('dot_inbox',d.id,{...d,reaction:'delivered'});
+      }else{
+       if(d.reaction==='failed'||d.reaction==='delivered')continue;
+       targets.push(target);
+       await tx.put('dot_inbox',d.id,{...d,reaction:'failed'});
+      }
+     }
+    }
+    return {changed,accepted,exhausted,targets};
    });
-   if(changedDuringWake)candidates.push(candidate);
+   if(outcome?.targets?.length){
+    const emoji=outcome.accepted?INBOUND_REACTIONS.delivered:INBOUND_REACTIONS.failed;
+    for(const target of outcome.targets)inboundTelegramReaction(this.app,target,emoji);
+   }
+   if(outcome?.changed)candidates.push(candidate);
   }
+  holdInboundReactions(this.app);
  }
  async refresh(owner,agentId){
   await this.store.withLock('dms:'+owner,async tx=>{const wake=await tx.get('dot_wake',agentId);if(wake)await tx.put('dot_wake',agentId,{...wake,wakeId:null,attempts:0,exhausted:false,next:0});});

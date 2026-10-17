@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {Store} from '../src/store.js';
-import {App} from '../src/app.js';
+import {Readable} from 'node:stream';
+import {App,handler} from '../src/app.js';
 import {DotInbox,DOT_INBOX_POLICY} from '../src/dot-inbox.js';
 import {Dms,DM_POLICY} from '../src/dms.js';
 import {registerAgent} from '../src/agents.js';
 import {configureHuman} from '../src/telegram-owner.js';
+import {INBOUND_REACTIONS,waitInboundReactions} from '../src/telegram-reactions.js';
 const owner='mcp:admin',secret='whsec_'+Buffer.alloc(32,8).toString('base64');
 class MemoryStore {
  constructor(){this.data=new Map();this.queue=Promise.resolve();}
@@ -19,6 +21,7 @@ class MemoryStore {
  async withLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;const before=structuredClone(this.data);try{return await fn(this);}catch(e){this.data=before;throw e;}finally{release();}}
  async telegramReactionSnapshot(botId,owner,agentId){return {bot:await this.get('bot',botId),route:await this.get('group_bot',botId),agent:await this.get('agent',agentId),humans:await this.list('human',owner)};}
  async withBotLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;try{return await fn(this);}finally{release();}}
+ async reserveDeniedReply(){return true;}
  async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
 }
 async function fixture(store=new MemoryStore()){
@@ -74,8 +77,8 @@ test('Telegram private DMs from registered humans enter the bound inbox; groups 
  assert.equal(f.events.length,1);assert.equal((await f.store.list('chat')).length,0);
  await f.app.receive('123','hook',{update_id:1,message:privateMsg});assert.equal(f.events.length,1);
  const reply=await f.g.send(f.a,{to:'person',text:'reply',request_id:'reply-001'});assert.equal(reply.telegram.status,'sent');
- assert.equal(f.telegram.length,1);assert.equal(f.telegram[0].args.chat_id,'42');
- await f.g.send(f.a,{to:'person',text:'reply',request_id:'reply-001'});assert.equal(f.telegram.length,1);
+ const sends=f.telegram.filter(c=>c.method==='sendMessage');assert.equal(sends.length,1);assert.equal(sends[0].args.chat_id,'42');
+ await f.g.send(f.a,{to:'person',text:'reply',request_id:'reply-001'});assert.equal(f.telegram.filter(c=>c.method==='sendMessage').length,1);
  await assert.rejects(f.g.send(f.a,{to:'unregistered',text:'blocked',request_id:'reply-002'}),/Unknown recipient/);
 });
 test('expired listener holds payload; retry backs off; accepted and expired payloads disappear',async()=>{
@@ -200,4 +203,111 @@ test('pre-upgrade pending dot delivery is cached without extending retention',as
  const f=await dotFixture(),expires=Date.now()+50000;await f.g.subscription(f.dot,inbox());
  await f.store.put('group_delivery','old-dot',{owner,agentId:f.dot.agentId,state:'pending',attempts:0,next:0,leaseUntil:0,expires,event:{eventId:'old_message',name:'message.created',timestamp:new Date().toISOString(),data:{message_id:'old_message',sender:{kind:'agent',id:f.a.agentId,handle:'alpha'},to:{kind:'agent',id:f.dot.agentId,handle:'dot'},text:'retained on rollout'},cursor:null}});
  await f.g.dispatch(owner);assert.equal((await f.store.list('group_delivery')).length,0);const rows=await f.store.list('dot_inbox');assert.equal(rows.length,1);assert.equal(rows[0].expires,expires);assert.equal((await f.inbox.list(f.dot)).messages[0].text,'retained on rollout');assert.equal(f.events[0].event.data.type,'inbox.ready');
+});
+
+const reactionEmojis=calls=>calls.filter(c=>c.method==='setMessageReaction').map(c=>c.args.reaction[0].emoji);
+async function boundBot(f,agentId){
+ await f.store.put('bot','123',{id:'123',owner,active:true,token:f.app.encrypt('synthetic'),hookSecret:'hook'});
+ await f.store.put('group_bot','123',{owner,agentId,bindingId:'generation-one'});
+ await configureHuman(f.app,owner,{human_handle:'person',telegram_user_id:'42'});
+ return {message_id:7,from:{id:42,is_bot:false,first_name:'Owner'},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'hello dm'};
+}
+
+test('inbound Telegram DMs react received, delivered, failed, and never on rejected admission',async()=>{
+ const received=await fixture();await boundBot(received,received.a.agentId);
+ await received.app.receive('123','hook',{update_id:1,message:{message_id:7,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'held'}});
+ await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(received.telegram),[INBOUND_REACTIONS.received]);
+ assert.equal((await received.store.list('group_delivery')).length,1);
+ const [held]=received.telegram.filter(c=>c.method==='setMessageReaction');
+ assert.equal(held.args.chat_id,'42');assert.equal(held.args.message_id,7);assert.deepEqual(held.args.reaction,[{type:'emoji',emoji:INBOUND_REACTIONS.received}]);
+
+ const delivered=await fixture();const dm=await boundBot(delivered,delivered.a.agentId);await delivered.g.subscription(delivered.a,inbox());
+ await delivered.app.receive('123','hook',{update_id:1,message:dm});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(delivered.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ await delivered.app.receive('123','hook',{update_id:1,message:dm});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(delivered.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+
+ const failed=await fixture();await boundBot(failed,failed.a.agentId);
+ const original=failed.app.post;failed.app.post=async(url,h,body)=>{const e=JSON.parse(body);if(e.name==='agent.notification'&&e.data?.type==='message.created')return {status:400,body:''};return original(url,h,body);};
+ await failed.g.subscription(failed.a,inbox());
+ await failed.app.receive('123','hook',{update_id:1,message:{message_id:7,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'undeliverable'}});
+ await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(failed.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.failed]);
+
+ const rejected=await fixture();await rejected.store.put('bot','123',{id:'123',owner,active:true,token:rejected.app.encrypt('synthetic'),hookSecret:'hook'});
+ await rejected.store.put('group_bot','123',{owner,agentId:rejected.a.agentId,bindingId:'generation-one'});
+ await rejected.app.receive('123','hook',{update_id:1,message:{message_id:7,from:{id:99,is_bot:false},chat:{id:99,type:'private'},date:Math.floor(Date.now()/1000),text:'unregistered'}});
+ await waitInboundReactions();
+ assert.equal(reactionEmojis(rejected.telegram).length,0);
+ assert(rejected.telegram.some(c=>c.method==='sendMessage'&&c.args.text.includes('你的 Telegram ID 是 99')));
+ await rejected.app.receive('123','hook',{update_id:2,message:{message_id:8,from:{id:42,is_bot:false},chat:{id:-1,type:'group'},date:Math.floor(Date.now()/1000),text:'group'}});
+ await waitInboundReactions();
+ assert.equal(reactionEmojis(rejected.telegram).length,0);
+});
+
+test('inbound reaction transport failure is log-only and does not block delivery or retry',async()=>{
+ const f=await fixture();const dm=await boundBot(f,f.a.agentId);await f.g.subscription(f.a,inbox());
+ const logs=[],info=console.info;console.info=value=>logs.push(value);
+ const original=f.app.telegram;let reactionCalls=0;
+ f.app.telegram=async(t,method,args)=>{if(method==='setMessageReaction'){reactionCalls++;throw Object.assign(new Error('synthetic reaction failure'),{telegramOutcome:'failed'});}return original(t,method,args);};
+ try{
+  await f.app.receive('123','hook',{update_id:1,message:dm});await waitInboundReactions();
+  assert.equal(f.events.filter(e=>e.event.data.type==='message.created').length,1);
+  assert.equal(f.events[0].event.data.message.text,'hello dm');
+  assert.equal(reactionCalls,2);
+  assert(logs.some(line=>String(line).includes('inbound_reaction_failed')&&String(line).includes(INBOUND_REACTIONS.received)));
+  assert(!JSON.stringify(logs).includes('hello dm'));assert(!JSON.stringify(logs).includes('synthetic'));
+ }finally{console.info=info;}
+});
+
+test('in-progress inbound delivery keeps the received reaction until a terminal outcome',async()=>{
+ const f=await fixture();await boundBot(f,f.a.agentId);
+ const original=f.app.post;f.app.post=async(url,h,body)=>{const e=JSON.parse(body);if(e.name==='agent.notification'&&e.data?.type==='message.created')return {status:503,body:''};return original(url,h,body);};
+ await f.g.subscription(f.a,inbox());
+ await f.app.receive('123','hook',{update_id:1,message:{message_id:7,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'retry later'}});
+ await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received]);
+ const d=(await f.store.list('group_delivery')).find(row=>row.event?.data?.telegram?.message_id===7);assert.equal(d.state,'pending');
+});
+
+test('dot inbound DMs react delivered after inbox.ready and failed after wake exhaustion',async()=>{
+ const ok=await dotFixture();const dm=await boundBot(ok,ok.dot.agentId);await ok.g.subscription(ok.dot,inbox());
+ await ok.app.receive('123','hook',{update_id:1,message:dm});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(ok.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ assert.equal((await ok.inbox.list(ok.dot)).messages.length,1);
+
+ const fail=await dotFixture();await boundBot(fail,fail.dot.agentId);await fail.g.subscription(fail.dot,inbox());
+ fail.app.post=async()=>({status:400});
+ await fail.app.receive('123','hook',{update_id:2,message:{message_id:9,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'wake fails'}});
+ for(let i=1;i<8;i++){const wake=await fail.store.get('dot_wake',fail.dot.agentId);await fail.store.put('dot_wake',fail.dot.agentId,{...wake,next:0});await fail.g.dispatch(owner);}
+ await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(fail.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.failed]);
+ assert.equal((await fail.store.list('dot_inbox'))[0].reaction,'failed');
+ await fail.app.receive('123','hook',{update_id:3,message:{message_id:10,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'second wake fails'}});
+ for(let i=1;i<8;i++){const wake=await fail.store.get('dot_wake',fail.dot.agentId);await fail.store.put('dot_wake',fail.dot.agentId,{...wake,next:0});await fail.g.dispatch(owner);}
+ await waitInboundReactions();
+ const failedIds=fail.telegram.filter(c=>c.method==='setMessageReaction'&&c.args.reaction[0].emoji===INBOUND_REACTIONS.failed).map(c=>c.args.message_id);
+ assert.deepEqual(failedIds,[9,10]);
+ fail.app.post=async(url,h,body)=>{const e=JSON.parse(body);return {status:200,body:JSON.stringify({challenge:e.challenge})};};
+ const wake=await fail.store.get('dot_wake',fail.dot.agentId);await fail.store.put('dot_wake',fail.dot.agentId,{...wake,exhausted:false,next:0,attempts:0});
+ await fail.g.dispatch(owner);await waitInboundReactions();
+ assert.deepEqual(fail.telegram.filter(c=>c.method==='setMessageReaction'&&c.args.reaction[0].emoji===INBOUND_REACTIONS.delivered).map(c=>c.args.message_id).sort((a,b)=>a-b),[9,10]);
+});
+
+test('Telegram webhook returns while waitUntil holds inbound reaction work',async()=>{
+ const f=await fixture();const dm=await boundBot(f,f.a.agentId);
+ const held=[];f.app.waitUntil=work=>held.push(work);
+ let release;const blocked=new Promise(r=>release=r);
+ const original=f.app.telegram;
+ f.app.telegram=async(t,method,args)=>{if(method==='setMessageReaction'){await blocked;f.telegram.push({method,args});return {ok:true};}return original(t,method,args);};
+ const req=Readable.from([JSON.stringify({update_id:1,message:dm})]);
+ Object.assign(req,{url:'/telegram/123',method:'POST',headers:{'x-telegram-bot-api-secret-token':'hook','content-type':'application/json'}});
+ let ended=false;const res={headers:{},setHeader(k,v){this.headers[k]=v;},end(b){ended=true;this.body=b??'';}};
+ await handler(f.app)(req,res);
+ assert.equal(ended,true);assert.equal(res.statusCode,200);assert.deepEqual(JSON.parse(res.body),{ok:true});
+ assert.equal(reactionEmojis(f.telegram).length,0);assert(held.length>=1);
+ let settled=false;Promise.all(held).then(()=>settled=true);await Promise.resolve();assert.equal(settled,false);
+ release();await Promise.all(held);await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received]);
 });

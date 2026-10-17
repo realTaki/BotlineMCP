@@ -6,6 +6,7 @@ import {BotBindings} from './bots.js';
 import {RelayErrors,relayErrorDetails} from './relay-errors.js';
 import {getHuman,getHumanByTelegramId,listHumans} from './telegram-owner.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
+import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 const DAY=86400000;
 export const DM_POLICY={payloadTtl:DAY,receiptTtl:7*DAY,maxPending:512};
 const string={type:'string'};
@@ -81,9 +82,14 @@ export class Dms {
    if(isDotInboxAgent(agent)){const route=await tx.get('group_bot',bot.id);requireThat(route?.owner===bot.owner&&route.agentId===bot.groupAgentId&&route.bindingId===bot.bindingId,'Telegram binding changed',403);}
    const human=await getHumanByTelegramId({store:tx},bot.owner,String(m.from.id));
    const sender=human?{kind:'human',id:human.telegram_user_id,handle:human.handle,name:human.display_name}:{kind:'telegram',is_bot:m.from.is_bot,id:String(m.from.id),name:[m.from.first_name,m.from.last_name].filter(Boolean).join(' ')};
-   const event={eventId:messageId,name:'message.created',timestamp:new Date(m.date*1000).toISOString(),data:{message_id:messageId,sender,to:{kind:'agent',id:agent.agent_id,handle:agent.handle},text:m.text,telegram:{bot_id:bot.id,chat_id:String(m.chat.id),...(isDotInboxAgent(agent)?{binding_id:bot.bindingId}:{})}},cursor:null};
+   const event={eventId:messageId,name:'message.created',timestamp:new Date(m.date*1000).toISOString(),data:{message_id:messageId,sender,to:{kind:'agent',id:agent.agent_id,handle:agent.handle},text:m.text,telegram:{bot_id:bot.id,chat_id:String(m.chat.id),message_id:m.message_id,...(isDotInboxAgent(agent)?{binding_id:bot.bindingId}:{})}},cursor:null};
    await this.enqueue(tx,bot.owner,event,[bot.groupAgentId]);await tx.put('group_receipt',rid,{owner:bot.owner,message_id:messageId,expires:Date.now()+DM_POLICY.receiptTtl});return true;
-  });if(queued)await this.dispatch(bot.owner);return true;
+  });
+  if(queued){
+   inboundTelegramReaction(this.app,{botId:bot.id,chatId:String(m.chat.id),messageId:m.message_id},INBOUND_REACTIONS.received);
+   await this.dispatch(bot.owner);
+  }
+  return true;
  }
  async subscription(p,params,remove=false){
   const actor=await this.actor(p),name=params.name,args=params.arguments??{};
@@ -146,10 +152,13 @@ export class Dms {
     d.next=Date.now()+Math.min(300000,1000*2**d.attempts);
     if(Date.now()>=deadline)break;
    }
+   if(d.state==='accepted')inboundTelegramReaction(this.app,telegramReactionTarget(d.event),INBOUND_REACTIONS.delivered);
+   else if(d.state==='failed')inboundTelegramReaction(this.app,telegramReactionTarget(d.event),INBOUND_REACTIONS.failed);
    if(d.state!=='pending')await this.store.delete('group_delivery',candidate.id);else await this.store.put('group_delivery',candidate.id,d);
    if(!(status>=200&&status<300))try{const code=grokbot?status===409?'cursor_key_unreadable':'grokbot_delivery_failed':'relay_delivery_failed';error_notifications.push(await new RelayErrors(this.app).report({owner,agentId:d.agentId,code}));}catch{error_notifications.push({...relayErrorDetails('relay_delivery_failed'),notification:{agent:'unavailable',telegram:'unavailable'}});}
   }
   await new DotInbox(this.app).dispatch(owner,agentId=>this.inboxId(agentId));
+  holdInboundReactions(this.app);
   return {failed_event_ids,error_notifications};
  }
 }
