@@ -20,6 +20,7 @@ class MemoryStore {
  async withLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;const before=structuredClone(this.data);try{return await fn(this);}catch(e){this.data=before;throw e;}finally{release();}}
  async telegramReactionSnapshot(botId,owner,agentId){return {bot:await this.get('bot',botId),route:await this.get('group_bot',botId),agent:await this.get('agent',agentId),humans:await this.list('human',owner)};}
  async withBotLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;try{return await fn(this);}finally{release();}}
+ async reserveDeniedReply(){return true;}
  async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
 }
 async function fixture(store=new MemoryStore()){
