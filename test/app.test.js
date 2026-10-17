@@ -415,8 +415,10 @@ test('existing onboarding guide consistently distinguishes dot inbox from direct
  assert.match(instructions,/inbox.ready wake hints: call messages_inbox, drain pages, deduplicate by message_id, and call messages_ack only after processing/);
  assert.match(instructions,/Grok Bot destinations receive direct Cursor messages and must not create an inbox subscription/);
  assert.match(instructions,/Other webhook agents also maintain one subscription/);
- assert.match(instructions,/visible sender handle and verified platform label from authenticated routing metadata/);
- assert.match(instructions,/one BotlineMCP sender header/);assert.match(instructions,/does not establish owner authorship/);
+ assert.match(instructions,/visible sender handle and verified type from authenticated routing metadata/);
+ assert.match(instructions,/one BotlineMCP sender header \(\[handle\.type@botline\]:\)/);assert.match(instructions,/does not establish owner authorship/);
+ assert.match(instructions,/Handle encoding prevents "\." or "@" from forging another identity/);
+ assert.doesNotMatch(instructions,/\[MCP\] handle@platform:/);
  assert.match(instructions,/provide cursor_api_key on the first agent_register/);
  assert.doesNotMatch(instructions,/register a unique handle with agent_register, then maintain one agent.notification/);
  assert.equal(capabilities.resources,undefined);assert.equal(capabilities.prompts,undefined);
@@ -424,7 +426,7 @@ test('existing onboarding guide consistently distinguishes dot inbox from direct
  assert.match(description,/Dot uses exactly handle dot/);assert.match(description,/Grok Bot destinations must not subscribe/);assert.match(description,/ACK only processed messages/);
  assert(!tools.some(t=>/^(help|guide)$/.test(t.name)));
  const {readFile}=await import('node:fs/promises');
- for(const path of ['../README.md','../docs/dms.md']){const text=await readFile(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(text,/Choose a unique\s+handle on consent/);assert.match(text,/inbox.ready/);assert.match(text,/messages_ack/);assert.match(text,/Grok Bot\s+destinations do not subscribe/);assert.match(text,/agent_token/);assert.match(text,/thirteen tools/);}
+ for(const path of ['../README.md','../docs/dms.md']){const text=await readFile(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(text,/Choose a unique\s+handle on consent/);assert.match(text,/inbox.ready/);assert.match(text,/messages_ack/);assert.match(text,/Grok Bot\s+destinations do not subscribe/);assert.match(text,/agent_token/);assert.match(text,/thirteen tools/);assert.match(text,/\[handle\.type@botline\]:/);assert.doesNotMatch(text,/\[MCP\] handle@platform:/);}
 });
 
 test('whoami diagnostics use the same tool selection as authenticated discovery without revealing secrets',async()=>{
@@ -601,7 +603,7 @@ test('HTTP human change rejects spoofed type and delivers only to stored cross-t
  const change={...first,telegram_user_id:'43',replace_telegram_user_id:'42'};
  const spoof=JSON.parse((await call(change,{...headers,'x-mcp-bot-type':'grokbot'})).body);assert(spoof.error);assert.equal(delivered.length,0);assert.equal((await f.store.list('human_change',INSTANCE_ID)).length,0);
  const response=JSON.parse((await call(change)).body),challenge=response.result.structuredContent;
- assert.equal(challenge.status,'confirmation_required');assert.equal(delivered.length,1);assert.equal(delivered[0].agent.agentId,'agent_bot');assert(delivered[0].text.startsWith('[MCP] dot@chatgpt:\n'));
+ assert.equal(challenge.status,'confirmation_required');assert.equal(delivered.length,1);assert.equal(delivered[0].agent.agentId,'agent_bot');assert(delivered[0].text.startsWith('[dot.chatgpt@botline]:\n'));
  const code=delivered[0].text.match(/Code: ([\w-]+)/)[1];assert(!JSON.stringify(response).includes(code));
  const done=JSON.parse((await call({...change,challenge_id:challenge.challenge_id,confirmation_code:code})).body);assert.equal(done.result.structuredContent.human.telegram_user_id,'43');
  assert.equal(f.sent.length,0);assert.equal(f.calls.length,0);

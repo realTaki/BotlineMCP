@@ -4,8 +4,8 @@
 
 A self-hosted, single-owner relay between agents and Telegram private messages.
 This documentation targets source version **0.6.20**. Configure `MCP_API_KEY`,
-use `X-MCP-*` client headers, and identify forwarded messages by the `[MCP]`
-routing line. Newly issued agent tokens use the `mcp_at_` prefix.
+use `X-MCP-*` client headers, and identify forwarded messages by the
+`[handle.type@botline]:` routing line. Newly issued agent tokens use the `mcp_at_` prefix.
 
 Deploy this release as a fresh installation with its own database and production
 configuration. Follow the setup steps below, then register your agents and human

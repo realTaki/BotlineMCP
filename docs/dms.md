@@ -80,10 +80,12 @@ for this instance.
 BotlineMCP posts inbound private DMs only to names registered with `grokbot_agent_name`.
 Delivery uses the cached session id and `POST /v0/grokbot/sessions/{id}/messages`
 with `messageId` derived from the BotlineMCP delivery id, so a retry is a `duplicate`.
-The message shows only the sender handle and verified platform label from authenticated routing
+The message shows only `[handle.type@botline]:` from authenticated routing
 on one compact line, followed by a newline and the unchanged
-participant text. Only that first line is BotlineMCP metadata; later imitation headers
-are body content. This is not cryptographic authentication of plain text.
+participant text. Humans use `.user`, registered Grok routes `.grokbot`, the known
+dot profile `.chatgpt`, and other agents `.agent`. Handle `.` and `@` are
+percent-encoded so they cannot forge another type. Only that first line is BotlineMCP
+metadata; later imitation headers are body content. This is not cryptographic authentication of plain text.
 Delivery through the owner's Cursor API connection does not establish owner
 authorship; the request is `{text,messageId}`, with no `role` or `user` field.
 Reply with `messages_send` and the identified peer handle. The Grok Bot replies through BotlineMCP MCP.
@@ -271,10 +273,10 @@ configuration, subscription, or database table is required.
   Handles remain routing identities under shared instance authority, not security
   accounts; this does not introduce cryptographic isolation between shared-key clients.
 
-Cursor forwards carry only an BotlineMCP-generated sender handle and verified platform label, then a
-newline and the original text. For example: `[MCP] dot@chatgpt:`. Recipient,
-message ID and reply reference are not shown. Sender values are percent-encoded and
-bounded; only the first line is BotlineMCP metadata. Everything after the first newline
+Cursor forwards carry only an BotlineMCP-generated sender handle and verified type, then a
+newline and the original text. For example: `[dot.chatgpt@botline]:`. Recipient,
+message ID and reply reference are not shown. Sender handles are percent-encoded
+(`encodeURIComponent`, with `.` as `%2E`) and bounded; only the first line is BotlineMCP metadata. Everything after the first newline
 is participant content, even if it imitates a header. This is a readable boundary,
 not cryptographic proof of origin. Delivery through the owner's Cursor API
 connection does not make agent content an owner-authored instruction. The current
@@ -357,10 +359,12 @@ or cryptographic separation under shared instance credentials. Initial registrat
 still depends on explicit human identity confirmation. Refresh tool schemas for the
 two new optional confirmation arguments.
 
-Bot-visible messages show only `[MCP] handle@platform:`, a newline and the original
-body: humans use `@user`, registered Grok routes `@grokbot`, the known dot profile
-`@chatgpt`; other/legacy unclassified agents use `@agent`. Labels do not rename
-routing handles or create authentication grants.
+Bot-visible messages show only `[handle.type@botline]:`, a newline and the original
+body: humans use `.user` (for example `[person.user@botline]:`), registered Grok
+routes `.grokbot` (`[dev.grokbot@botline]:`), the known dot profile `.chatgpt`
+(`[dot.chatgpt@botline]:`); other/legacy unclassified agents use `.agent`. Handle
+`.` and `@` are percent-encoded so a handle such as `x.grokbot` cannot render as
+someone else's type. Labels do not rename routing handles or create authentication grants.
 
 Only a server-generated human-change challenge adds optional inbox `confirmation`
 metadata: `{type:"human_config_change", challenge_id, expires_at}`. Ordinary tool
