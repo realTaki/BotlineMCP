@@ -84,10 +84,13 @@ export async function settings(app,req,path,readBody,send,res) {
   res.setHeader('X-Frame-Options','DENY');
   res.setHeader('Vary','Cookie');
   const html=(status,value)=>send(status,value,'text/html; charset=utf-8');
+  let validationStage='request_format';
   try {
     checkSingleHeaders(req);
     requireThat(!new URL(req.url,app.origin).search,'Invalid request');
+    validationStage='cookie_format';
     const token=cookieToken(req);
+    validationStage='request_format';
     if(req.method==='GET'&&(path==='/settings'||path==='/settings/bot')) {
       const session=await validSession(app,token);
       if(session)return html(200,botForm(session));
@@ -99,6 +102,7 @@ export async function settings(app,req,path,readBody,send,res) {
     requireThat(req.method==='POST','Method not allowed',405);
     requireThat(typeof req.headers.origin==='string'&&req.headers.origin===app.origin,'Request rejected',403);
     if(path==='/settings/login') {
+      validationStage='form_fields';
       const fields=await formFields(req,readBody,['api_key']);
       requireThat(fields.api_key.length>=32&&fields.api_key.length<=1024&&app.instanceKeyHash&&same(hash(fields.api_key),app.instanceKeyHash),'Authentication required',401);
       if(token)await app.store.delete(SESSION_KIND,hash(token));
@@ -109,10 +113,14 @@ export async function settings(app,req,path,readBody,send,res) {
     }
     const session=await validSession(app,token);
     requireThat(session,'Authentication required',401);
+    validationStage='form_fields';
     const fields=await formFields(req,readBody,['csrf','token','agent_handle']);
     requireThat(same(fields.csrf,session.csrf),'Request rejected',403);
+    validationStage='bot_token_format';
     requireThat(fields.token.length<=256&&/^\d+:[A-Za-z0-9_-]{20,}$/.test(fields.token),'Invalid request');
+    validationStage='agent_handle_format';
     const handle=normalizeAgentHandle(fields.agent_handle);
+    validationStage='agent_handle_not_registered';
     const agent=await getAgent(app,INSTANCE_ID,'agent_'+hash(JSON.stringify([INSTANCE_ID,handle])));
     requireThat(agent,'Registered agent handle required');
     // Validate before consuming to prevent unauthenticated/CSRF denial of service.
@@ -145,6 +153,8 @@ export async function settings(app,req,path,readBody,send,res) {
     if(error.status===401)clearCookie(res);
     if(error.status===405)res.setHeader('Allow','POST');
     const status=[400,401,403,404,405,413,415].includes(error.status)?error.status:500;
+    const validationMessages={request_format:'The request format is invalid. Open Settings without query parameters.',cookie_format:'The settings cookie format is invalid. Start a fresh Settings session.',form_fields:'The submitted form fields are missing, duplicated or malformed. Open the current Settings form again.',bot_token_format:'The Telegram Bot Token format is invalid. Enter only the BotFather token, without spaces, quotes or a bot prefix. Do not share it in chat.',agent_handle_format:'The agent handle format is invalid. Use the registered handle shown by your connected agent.',agent_handle_not_registered:'This agent handle is not registered in this instance. Check agent_whoami with your connected agent.'};
+    if(status===400){const code=Object.hasOwn(validationMessages,validationStage)?validationStage:'request_format';return html(400,page('Settings input rejected',`<h1>Settings input rejected</h1><p>Error code: ${code}</p><p>${validationMessages[code]}</p><p>No Telegram webhook change was attempted by this rejected request.</p><p><a href="/settings">Return to Settings</a></p>`));}
     const message=status===401?'Authentication required or session expired.':status===403?'Request rejected.':status===400?'Invalid form or registered agent handle. Check the input without sharing credentials.':'Unable to complete this settings request.';
     return html(status,page('Settings request',`<h1>${message}</h1><p><a href="/settings">Return to Settings</a></p>`));
   }

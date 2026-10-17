@@ -368,3 +368,5 @@ an agent automatically. Cursor text has no separate hidden metadata channel.
 ## Settings binding diagnostics
 
 Settings reports fixed nonsecret failure codes. A foreign webhook is rejected before any webhook change; disconnect it through its owning service with approval. Identity or webhook inspection failures also do not attempt a webhook write. Once a webhook write is attempted, a failed response or final persistence remains unconfirmed: inspect `telegram_bot_get` and do not automatically retry. Binding attempts still consume their one-use settings session. No credential, foreign webhook URL, or raw upstream error is displayed. Mock regression coverage is not a live Telegram binding acceptance test.
+
+Input rejection codes distinguish request/cookie/form structure, bot-token format, handle format, and unregistered handles without echoing submitted fields. An input rejection does not attempt a Telegram webhook change. The OAuth dot identity and Settings handle lookup share the same instance namespace and are covered with a parsed-form regression test.

@@ -1,7 +1,7 @@
 // One stateless protocol revision on every HTTP request.
 export const PROTOCOL_VERSION='2026-07-28';
 export const SUPPORTED_VERSIONS=[PROTOCOL_VERSION];
-export const SERVER_INFO={name:'BotlineMCP',version:'0.6.19'};
+export const SERVER_INFO={name:'BotlineMCP',version:'0.6.20'};
 const prefix='io.modelcontextprotocol/';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const failure=(code,message,data)=>({code,message,...(data?{data}:{})});

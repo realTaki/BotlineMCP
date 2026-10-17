@@ -260,3 +260,18 @@ test('Settings pre-write storage failure is safe, definite and one-use',async()=
  f.store.insert=async(k,id,v)=>{if(k==='bot')throw Error('secret '+token+' '+apiKey);return insert(k,id,v);};
  const result=await submit(f,s);assert.equal(result.status,502);assert.match(result.body,/binding_storage_failed/);assert.match(result.body,/No Telegram webhook change was attempted/);assertNoSecrets(result,token,apiKey);assert.equal(f.calls.filter(c=>c.method==='setWebhook').length,0);assert.equal((await submit(f,s)).status,401);
 });
+
+
+test('Settings input diagnostics distinguish token, handle and parser errors without secrets',async()=>{
+ const f=fixture(),s=await login(f);
+ for(const [fields,code] of [[{token:'bad '+token},'bot_token_format'],[{agent_handle:'invalid handle'},'agent_handle_format'],[{agent_handle:'missing-agent'},'agent_handle_not_registered']]){
+  const r=await submit(f,s,{},fields);assert.equal(r.status,400);assert.match(r.body,new RegExp('Error code: '+code));assertNoSecrets(r,token,apiKey,fields.agent_handle??'not-a-value');assert(await f.store.get('settings_session',hash(s.token)));assert.equal(f.calls.length,0);
+ }
+ const r=await request(f.app,'/settings/bind','POST','',{...formHeaders,cookie:s.cookie},{body:{csrf:s.csrf,token,agent_handle:[agentHandle,agentHandle]}});assert.equal(r.status,400);assert.match(r.body,/Error code: form_fields/);assertNoSecrets(r,token,apiKey);assert.equal(f.calls.length,0);
+});
+
+test('Settings lookup matches a registered dot OAuth identity and parsed form bodies',async()=>{
+ const f=fixture();const registered=await f.app.invoke('mcp:admin','agent_register',{handle:'dot',display_name:'dot'},{owner:'mcp:admin',authType:'oauth',sessionId:'synthetic-oauth-lineage'});
+ const s=await login(f);const r=await request(f.app,'/settings/bind','POST','',{...formHeaders,cookie:s.cookie},{body:{csrf:s.csrf,token,agent_handle:'dot'}});
+ assert.equal(r.status,200);assert.equal((await f.store.get('group_bot','123')).agentId,registered.agent_id);assertNoSecrets(r,token,apiKey,registered.agent_token);
+});
