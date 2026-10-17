@@ -48,3 +48,7 @@ and a clear list of intended external messages and configuration changes.
 Keep runtime IDs, private domains, message bodies, credentials, account screenshots
 and operational evidence out of the public source tree. Publish only a sanitized
 summary with the source revision and exact verified scope.
+
+## Settings binding diagnostics
+
+Settings reports fixed nonsecret failure codes. A foreign webhook is rejected before any webhook change; disconnect it through its owning service with approval. Identity or webhook inspection failures also do not attempt a webhook write. Once a webhook write is attempted, a failed response or final persistence remains unconfirmed: inspect `telegram_bot_get` and do not automatically retry. Binding attempts still consume their one-use settings session. No credential, foreign webhook URL, or raw upstream error is displayed. Mock regression coverage is not a live Telegram binding acceptance test.

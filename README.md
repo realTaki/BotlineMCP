@@ -3,7 +3,7 @@
 [GitHub repository](https://github.com/realTaki/BotlineMCP)
 
 A self-hosted, single-owner relay between agents and Telegram private messages.
-This documentation targets source version **0.6.18**. Configure `MCP_API_KEY`,
+This documentation targets source version **0.6.19**. Configure `MCP_API_KEY`,
 use `X-MCP-*` client headers, and identify forwarded messages by the `[MCP]`
 routing line. Newly issued agent tokens use the `mcp_at_` prefix.
 

@@ -65,20 +65,28 @@ export class App {
   async authVersion(owner) {return owner===INSTANCE_ID?this.instanceKeyHash:null;}
   async own(owner,id) {const bot=await this.store.get('bot',id);requireThat(bot?.owner===owner,'Bot not found',404);return bot;}
   view(bot) {return {bot_id:bot.id,username:bot.username,active:bot.active};}
-  async bind(owner,args,{agentId,bindingRoute,expectedBotId}={}) {
-    if(agentId){const result=await new BotBindings(this).bind(owner,args,{agentId});return result;}
+  async bind(owner,args,{agentId,bindingRoute,expectedBotId,bindingDiagnostic}={}) {
+    if(agentId){const result=await new BotBindings(this).bind(owner,args,{agentId,bindingDiagnostic});return result;}
     requireThat(typeof args.token==='string' && /^\d+:[A-Za-z0-9_-]{20,}$/.test(args.token),'Invalid bot token format');
+    if(bindingDiagnostic)bindingDiagnostic.stage='telegram_identity';
     const me=await this.telegram(args.token,'getMe'); requireThat(me.is_bot,'Not a bot credential');
     requireThat(String(me.id)===args.token.split(':')[0]&&(!expectedBotId||String(me.id)===expectedBotId),'Telegram bot identity mismatch',409);
+    if(bindingDiagnostic)bindingDiagnostic.stage='binding_storage';
     const id=String(me.id),old=await this.store.get('bot',id);
+    if(bindingDiagnostic)bindingDiagnostic.stage='binding_validation';
     requireThat(!old || old.owner===owner,'Bot is already bound to another agent',409);
+    if(bindingDiagnostic)bindingDiagnostic.stage='webhook_inspection';
     const target=`${this.origin}/telegram/${id}`, info=await this.telegram(args.token,'getWebhookInfo');
+    if(bindingDiagnostic&&info.url&&info.url!==target)bindingDiagnostic.stage='foreign_webhook';
     requireThat(!info.url || info.url===target,'Bot webhook belongs to another service; disconnect it there first',409);
+    if(bindingDiagnostic)bindingDiagnostic.stage='binding_storage';
     let bot={id,owner,username:me.username,token:this.encrypt(args.token),hookSecret:old?.hookSecret??nonce(),active:false};
     if (!old) requireThat(await this.store.insert('bot',id,bot),'Concurrent binding; retry',409);
     else await this.store.put('bot',id,bot);
     if(bindingRoute)await this.store.put('group_bot',id,bindingRoute);
+    if(bindingDiagnostic)bindingDiagnostic.stage='webhook_write';
     await this.telegram(args.token,'setWebhook',{url:target,secret_token:bot.hookSecret,allowed_updates:['message','my_chat_member'],drop_pending_updates:false});
+    if(bindingDiagnostic)bindingDiagnostic.stage='webhook_written';
     bot.active=true;
     await this.store.put('bot',id,bot);
     return this.view(bot);
@@ -94,7 +102,7 @@ export class App {
     }
     if(['invite_create','invite_list','invite_revoke','agent_list','agent_disable'].includes(name))requireThat(false,'Invitations and per-agent accounts are retired; use the instance key.',410);
     if(['telegram_whitelist_update','bot_access_update','bot_access_get'].includes(name))requireThat(false,'Per-bot allowlists are retired; use human_register.',410);
-    if(name==='agent_whoami'){const agent=principal.agentId?await getAgent(this,owner,principal.agentId):null;const available_tool_names=(await this.availableTools(principal,botType)).map(t=>t.name),tool_profile=!principal.agentId?'bootstrap':available_tool_names.includes('messages_inbox')?'dot':'bot';return {...(agent?{registered:true,...agent}:{registered:false,agent_id:null}),server_version:'0.6.18',tool_profile,available_tool_names};}
+    if(name==='agent_whoami'){const agent=principal.agentId?await getAgent(this,owner,principal.agentId):null;const available_tool_names=(await this.availableTools(principal,botType)).map(t=>t.name),tool_profile=!principal.agentId?'bootstrap':available_tool_names.includes('messages_inbox')?'dot':'bot';return {...(agent?{registered:true,...agent}:{registered:false,agent_id:null}),server_version:'0.6.19',tool_profile,available_tool_names};}
     if(name==='agent_register')return registerAgent(this,principal,args);
     if(name==='agent_token_rotate')return rotateAgentToken(this,principal);
     if(name==='cursor_key_set')return setCursorKey(this,principal,args);
@@ -279,7 +287,7 @@ export function handler(app) {
     if(path==='/settings'||path.startsWith('/settings/'))return await settings(app,req,path,readBody,send,res);
     if(path.startsWith('/oauth/')||path.startsWith('/.well-known/')) return await oauth(app,req,path,readBody,send,res);
     if(path==='/agents/redeem')return send(410,{error:'Invitations are retired. Connect with the instance key.'});
-    if(path==='/health')return send(200,{service:'BotlineMCP',status:'configured',version:'0.6.18'});
+    if(path==='/health')return send(200,{service:'BotlineMCP',status:'configured',version:'0.6.19'});
     if(path==='/bind')return send(410,{error:'Link-only binding has been retired. Use authenticated MCP bot_bind.'});
     if(path.startsWith('/telegram/')&&req.method==='POST') {
       const update=JSON.parse(await readBody(req,262144)),botId=path.slice(10),secret=req.headers['x-telegram-bot-api-secret-token'];let done;

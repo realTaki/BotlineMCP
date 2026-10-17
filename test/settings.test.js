@@ -166,7 +166,7 @@ test('Settings rebind writes token and webhook without allowlists',async()=>{
 
 test('Settings cannot replace another webhook or take ownership of another agent bot',async()=>{
   const f=fixture();f.app.telegram=async(t,method)=>method==='getMe'?{id:123,is_bot:true,username:'synthetic_bot'}:method==='getWebhookInfo'?{url:'https://other-service.example/hook'}:assert.fail('Webhook must not be replaced');
-  let s=await login(f);assert.equal((await submit(f,s)).status,502);assert.equal(await f.store.get('bot','123'),undefined);
+  let s=await login(f);const conflict=await submit(f,s);assert.equal(conflict.status,409);assert.match(conflict.body,/foreign_webhook/);assert.match(conflict.body,/No webhook change was attempted/);assertNoSecrets(conflict,'https://other-service.example/hook',token,apiKey);assert.equal(await f.store.get('bot','123'),undefined);assert.equal((await submit(f,s)).status,401);
   f.app.telegram=async()=>({id:123,is_bot:true,username:'synthetic_bot'});await f.store.put('bot','123',{owner:'fixture-agent'});s=await login(f);assert.equal((await submit(f,s)).status,502);assert.equal((await f.store.get('bot','123')).owner,'fixture-agent');
 });
 
@@ -207,7 +207,7 @@ test('Existing API-key session binds the selected normalized handle',async()=>{
   f.app.bind=async(owner,args,options)=>{called={owner,args,options};return {bot_id:'123',username:'synthetic_bot'};};
   const result=await submit(f,s,{}, {agent_handle:' SETTINGS-AGENT '});
   assert.equal(result.status,200);
-  assert.deepEqual(called,{owner:'mcp:admin',args:{token},options:{agentId}});
+  assert.deepEqual(called,{owner:'mcp:admin',args:{token},options:{agentId,bindingDiagnostic:{stage:'binding_validation'}}});
   assert.equal((await f.store.list('agent')).length,1);
   assert.equal((await f.store.list('agent_session')).length,0);
   assert.equal(await f.store.get('settings_session',hash(s.token)),undefined);
@@ -239,4 +239,24 @@ test('Failed Settings rebind leaves an existing bot durably inactive without res
   assert.equal(result.status,502);const bot=await f.store.get('bot','123');
   assert.equal(bot.active,false);
   assert.equal((await f.store.get('group_bot','123')).agentId,agentId);assert.equal(await f.store.get('settings_session',hash(s.token)),undefined);
+});
+
+for(const method of ['getMe','getWebhookInfo'])test(`Settings distinguishes ${method} failures from webhook write uncertainty`,async()=>{
+ const f=fixture(),original=f.app.telegram,s=await login(f);let writes=0;
+ f.app.telegram=async(t,m,a)=>{if(m==='setWebhook')writes++;if(m===method)throw Error('https://api.telegram.org/bot'+token+'/ '+apiKey);return original(t,m,a);};
+ const result=await submit(f,s);assert.equal(result.status,502);assert.match(result.body,/No webhook change was attempted/);assert(!result.body.includes('may have succeeded'));assertNoSecrets(result,token,apiKey,'https://api.telegram.org');assert.equal(writes,0);assert.equal((await submit(f,s)).status,401);
+});
+
+test('Settings retains uncertain outcome after Telegram success but failed final storage',async()=>{
+ const f=fixture(),s=await login(f),put=f.store.put.bind(f.store);let writes=0;
+ f.store.put=async(k,id,v)=>{if(k==='bot'&&v.active)throw Error('storage '+apiKey);return put(k,id,v);};
+ const original=f.app.telegram;f.app.telegram=async(t,m,a)=>{if(m==='setWebhook')writes++;return original(t,m,a);};
+ const result=await submit(f,s);assert.equal(result.status,502);assert.match(result.body,/webhook_result_unconfirmed/);assert.match(result.body,/Do not automatically retry/);assertNoSecrets(result,token,apiKey);assert.equal(writes,1);assert.equal((await submit(f,s)).status,401);assert.equal(writes,1);
+});
+
+
+test('Settings pre-write storage failure is safe, definite and one-use',async()=>{
+ const f=fixture(),s=await login(f),insert=f.store.insert.bind(f.store);
+ f.store.insert=async(k,id,v)=>{if(k==='bot')throw Error('secret '+token+' '+apiKey);return insert(k,id,v);};
+ const result=await submit(f,s);assert.equal(result.status,502);assert.match(result.body,/binding_storage_failed/);assert.match(result.body,/No Telegram webhook change was attempted/);assertNoSecrets(result,token,apiKey);assert.equal(f.calls.filter(c=>c.method==='setWebhook').length,0);assert.equal((await submit(f,s)).status,401);
 });

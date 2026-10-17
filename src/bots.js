@@ -5,7 +5,7 @@ import {nonce,requireThat} from './security.js';
 export class BotBindings {
  constructor(app){this.app=app;}
  async actor(owner,agentId){requireThat(agentId&&await getAgent(this.app,owner,agentId),'Register and select an agent handle before binding a bot',409);}
- async bind(owner,args,{agentId}){
+ async bind(owner,args,{agentId,bindingDiagnostic}){
   await this.actor(owner,agentId);
   return this.app.store.withBotLock('bot-binding:'+owner,async tx=>{
    const app=Object.assign(Object.create(Object.getPrototypeOf(this.app)),this.app,{store:tx});
@@ -26,7 +26,7 @@ export class BotBindings {
     // The stored credential stays inside the server and is never returned to
     // MCP, diagnostic metadata, logs or the caller's argument list.
     const bindingArgs=hasExisting?{...args,token:app.decrypt(stored.token)}:args;
-    const bot=await app.bind(owner,bindingArgs,{bindingRoute:route,expectedBotId:expectedId});
+    const bot=await app.bind(owner,bindingArgs,{bindingRoute:route,expectedBotId:expectedId,bindingDiagnostic});
     requireThat(bot.bot_id===expectedId,'Telegram bot identity mismatch',409);
     return {...bot,agent_id:agentId,credential_source:hasExisting?'stored':'provided',webhook_events:['message','my_chat_member']};
    }catch(error){

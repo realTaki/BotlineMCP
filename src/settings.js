@@ -121,8 +121,23 @@ export async function settings(app,req,path,readBody,send,res) {
     clearCookie(res);
     requireThat(consumed&&activeSession(app,consumed)&&same(consumed.csrf,fields.csrf),'Authentication required',401);
     let result;
-    try {result=await app.bind(INSTANCE_ID,{token:fields.token},{agentId:agent.agent_id});}
-    catch {return html(502,page('Binding unconfirmed','<h1>Binding could not be confirmed</h1><p>This one-use session has ended. Check telegram_bot_get with your connected agent before trying again. A Telegram request may have succeeded even if its response was lost. Do not automatically retry.</p><p><a href="/settings">Return to Settings</a></p>'));}
+    // Per-attempt server-owned state, never request fields or raw errors. A write
+    // may have completed remotely even if its response or final storage failed.
+    const bindingDiagnostic={stage:'binding_validation'};
+    try {result=await app.bind(INSTANCE_ID,{token:fields.token},{agentId:agent.agent_id,bindingDiagnostic});}
+    catch {
+      const stage=bindingDiagnostic.stage;
+      const failures={
+        binding_validation:['binding_rejected','Binding was rejected before any Telegram webhook change. Check the selected handle and its existing bot binding.'],
+        telegram_identity:['telegram_identity_failed','Telegram bot identity could not be verified. Check the bot credential privately; Telegram may also be temporarily unavailable. No webhook change was attempted.'],
+        webhook_inspection:['webhook_inspection_failed','The current Telegram webhook could not be checked. No webhook change was attempted.'],
+        foreign_webhook:['foreign_webhook','This bot is still connected to another service. Disconnect it through that service with owner approval before binding here. No webhook change was attempted.'],
+        binding_storage:['binding_storage_failed','Binding preparation could not be saved. No Telegram webhook change was attempted.']
+      };
+      const known=failures[stage];
+      if(known)return html(stage==='foreign_webhook'?409:502,page('Binding not completed',`<h1>Binding not completed</h1><p>Error code: ${known[0]}</p><p>${known[1]}</p><p>This one-use session has ended. Do not resubmit it. Resolve the cause, then start a new Settings session.</p><p><a href="/settings">Return to Settings</a></p>`));
+      return html(502,page('Binding unconfirmed','<h1>Binding could not be confirmed</h1><p>Error code: webhook_result_unconfirmed</p><p>This one-use session has ended. Check telegram_bot_get with your connected agent before trying again. A Telegram request may have succeeded even if its response was lost. Do not automatically retry.</p><p><a href="/settings">Return to Settings</a></p>'));
+    }
     const botId=/^\d+$/.test(result.bot_id)?result.bot_id:'unavailable';
     const username=typeof result.username==='string'&&/^[A-Za-z0-9_]{1,64}$/.test(result.username)?` (@${escapeHtml(result.username)})`:'';
     return html(200,page('Bot bound',`<h1>Bot bound</h1><p>Telegram bot ${escapeHtml(botId)}${username} is connected.</p><p>Ask your agent to verify telegram_bot_get, call human_register once with a confirmed human and telegram_user_id, and maintain its agent.notification inbox subscription. Registered humans can DM every bound bot. Groups are ignored. Unregistered users are denied. No bot token is needed for these steps.</p><p><a href="/settings">Return to Settings</a></p>`));
@@ -130,7 +145,7 @@ export async function settings(app,req,path,readBody,send,res) {
     if(error.status===401)clearCookie(res);
     if(error.status===405)res.setHeader('Allow','POST');
     const status=[400,401,403,404,405,413,415].includes(error.status)?error.status:500;
-    const message=status===401?'Authentication required or session expired.':status===403?'Request rejected.':'Unable to complete this settings request.';
+    const message=status===401?'Authentication required or session expired.':status===403?'Request rejected.':status===400?'Invalid form or registered agent handle. Check the input without sharing credentials.':'Unable to complete this settings request.';
     return html(status,page('Settings request',`<h1>${message}</h1><p><a href="/settings">Return to Settings</a></p>`));
   }
 }
