@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {TelegramStatus,TELEGRAM_STATUS_TEXT} from '../src/telegram-status.js';
 import {hash} from '../src/security.js';
-const owner='asp:admin',agentId='agent-status',chatId='chat-status';
+const owner='mcp:admin',agentId='agent-status',chatId='chat-status';
 class MemoryStore{
  constructor(){this.data=new Map();this.tail=Promise.resolve();this.writes=[];}
  async get(k,id){return structuredClone(this.data.get(k+':'+id));}

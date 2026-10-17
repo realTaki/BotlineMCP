@@ -5,12 +5,12 @@ import {Store} from '../src/store.js';
 import {App,tools} from '../src/app.js';
 import {registerAgent} from '../src/agents.js';
 import {Dms} from '../src/dms.js';
-const owner='asp:admin',secret='whsec_'+Buffer.alloc(32,8).toString('base64'),token=id=>id+':'+ 'x'.repeat(30);
+const owner='mcp:admin',secret='whsec_'+Buffer.alloc(32,8).toString('base64'),token=id=>id+':'+ 'x'.repeat(30);
 async function fixture(){
  const db=new PGlite();let tail=Promise.resolve();const store=Object.create(Store.prototype);
  store.pool={query:(...a)=>db.query(...a),connect:async()=>{const prior=tail;let release;tail=new Promise(r=>release=r);await prior;return {query:(...a)=>db.query(...a),release};}};await store.initialize();
  const calls=[],events=[];let failHook=false,failSend=false,failDelete=false;
- const app=new App({store,instanceKey:'x'.repeat(64),key:Buffer.alloc(32,2).toString('base64'),origin:'https://asp.example',post:async(url,h,b)=>{const e=JSON.parse(b);if(e.type!=='verification')events.push(e);return{status:200,body:JSON.stringify({challenge:e.challenge})};},telegram:async(t,method,args)=>{calls.push({method,args});if(method==='getMe')return{id:Number(t.split(':')[0]),is_bot:true,username:'test'};if(method==='getWebhookInfo')return{url:''};if(method==='setWebhook'&&failHook)throw Error('hook failed');if(method==='deleteWebhook'&&failDelete)throw Error('delete uncertain');if(method==='sendMessage'&&failSend)throw Error('send uncertain');return{message_id:1};}});
+ const app=new App({store,instanceKey:'x'.repeat(64),key:Buffer.alloc(32,2).toString('base64'),origin:'https://mcp.example',post:async(url,h,b)=>{const e=JSON.parse(b);if(e.type!=='verification')events.push(e);return{status:200,body:JSON.stringify({challenge:e.challenge})};},telegram:async(t,method,args)=>{calls.push({method,args});if(method==='getMe')return{id:Number(t.split(':')[0]),is_bot:true,username:'test'};if(method==='getWebhookInfo')return{url:''};if(method==='setWebhook'&&failHook)throw Error('hook failed');if(method==='deleteWebhook'&&failDelete)throw Error('delete uncertain');if(method==='sendMessage'&&failSend)throw Error('send uncertain');return{message_id:1};}});
  const a=await registerAgent(app,{owner,authType:'api_key'},{handle:'alpha'}),b=await registerAgent(app,{owner,authType:'api_key'},{handle:'bravo'});
  return {db,store,app,calls,events,a:{owner,agentId:a.agent_id,authType:'api_key'},b:{owner,agentId:b.agent_id,authType:'api_key'},failHook:()=>failHook=true,failSend:()=>failSend=true,failDelete:()=>failDelete=true};
 }
@@ -87,7 +87,7 @@ test('Telegram group joins never admit chats even when delivery capacity is full
   await call(f,f.a,'telegram_bot_bind',{token:token(123)});await call(f,f.a,'human_register',{human:'person',telegram_user_id:'42'});
   const original=f.app.telegram;f.app.telegram=async(...a)=>a[1]==='getChatAdministrators'?[{status:'creator',user:{id:42,is_bot:false}}]:original(...a);
   const hook=(await f.store.get('bot','123')).hookSecret,join={update_id:1,my_chat_member:{chat:{id:-100,type:'group'},date:Math.floor(Date.now()/1000),old_chat_member:{status:'left',user:{id:123,is_bot:true}},new_chat_member:{status:'member',user:{id:123,is_bot:true}}}};
-  await f.store.pool.query("INSERT INTO asp_records(kind,id,value) SELECT 'group_delivery','capacity-'||n,$1::jsonb FROM generate_series(1,512) n",[JSON.stringify({owner,state:'pending',expires:Date.now()+60000})]);
+  await f.store.pool.query("INSERT INTO mcp_records(kind,id,value) SELECT 'group_delivery','capacity-'||n,$1::jsonb FROM generate_series(1,512) n",[JSON.stringify({owner,state:'pending',expires:Date.now()+60000})]);
   assert.equal(await f.app.receive('123',hook,join),true);assert.equal((await f.store.list('chat',owner)).length,0);
   assert.equal(f.calls.filter(c=>c.method==='getChatAdministrators').length,0);
  }finally{await f.db.close();}

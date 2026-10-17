@@ -47,7 +47,7 @@ test('registry normalizes handles, preserves IDs, updates explicit names, and sc
  const app=fixture();const first=await registerAgent(app,root,{handle:' Alice ',display_name:'Alice'});
  const again=await registerAgent(app,root,{handle:'alice',display_name:'Changed'});
  assert.equal(first.agent_id,again.agent_id);assert.equal(first.created_at,again.created_at);assert.equal(first.handle,'alice');assert.equal(again.display_name,'Changed');
- assert.match(first.agent_token,/^asp_at_/);assert.match(again.agent_token,/^asp_at_/);assert.notEqual(first.agent_token,again.agent_token);
+ assert.match(first.agent_token,/^mcp_at_/);assert.match(again.agent_token,/^mcp_at_/);assert.notEqual(first.agent_token,again.agent_token);
  const third=await registerAgent(app,root,{handle:'alice'});
  assert.equal(third.display_name,'Changed');assert.notEqual(third.agent_token,again.agent_token);
  const {agent_token,...pub}=third;
@@ -66,7 +66,7 @@ test('agent_token_rotate mints a new token and invalidates the previous hash',as
  const app=fixture();const registered=await registerAgent(app,root,{handle:'alice'});
  const principal={...root,agentId:registered.agent_id};
  const rotated=await rotateAgentToken(app,principal);
- assert.match(rotated.agent_token,/^asp_at_/);assert.notEqual(rotated.agent_token,registered.agent_token);
+ assert.match(rotated.agent_token,/^mcp_at_/);assert.notEqual(rotated.agent_token,registered.agent_token);
  assert.equal(rotated.agent_id,registered.agent_id);assert.equal(rotated.handle,'alice');assert.equal(rotated.agent_token.length<=128,true);
  const stored=await app.store.get('agent',registered.agent_id);
  assert.equal(stored.tokenHash,hash(rotated.agent_token));
@@ -78,10 +78,10 @@ test('agent_token_rotate mints a new token and invalidates the previous hash',as
 test('direct key selector requires registered identity and authenticate keeps owner return',async()=>{
  const app=fixture(),alice=await registerAgent(app,root,{handle:'alice'});
  assert.deepEqual(await authenticatePrincipal(app,request(apiKey)),root);
- assert.equal((await authenticatePrincipal(app,request(apiKey,{'x-asp-agent-id':alice.agent_id}))).agentId,alice.agent_id);
+ assert.equal((await authenticatePrincipal(app,request(apiKey,{'x-mcp-agent-id':alice.agent_id}))).agentId,alice.agent_id);
  assert.equal(await authenticate(app,request(apiKey)),owner);
- await assert.rejects(authenticatePrincipal(app,request(apiKey,{'x-asp-agent-id':'missing'})),/Unknown agent/);
- await assert.rejects(authenticatePrincipal(app,request(apiKey,{'x-asp-agent-id':[alice.agent_id]})),/Unknown agent/);
+ await assert.rejects(authenticatePrincipal(app,request(apiKey,{'x-mcp-agent-id':'missing'})),/Unknown agent/);
+ await assert.rejects(authenticatePrincipal(app,request(apiKey,{'x-mcp-agent-id':[alice.agent_id]})),/Unknown agent/);
  await assert.rejects(authenticatePrincipal(app,request('invalid')),/Authentication required/);
 });
 test('identical OAuth client IDs get distinct logical identities and stable refresh lineage',async()=>{
@@ -92,7 +92,7 @@ test('identical OAuth client IDs get distinct logical identities and stable refr
  const renewed=await refresh(app,a);
  assert.deepEqual(await authenticatePrincipal(app,request(renewed.access_token)),pa);
  // Request headers cannot impersonate another agent through an OAuth grant.
- assert.deepEqual(await authenticatePrincipal(app,request(a.access_token,{'x-asp-agent-id':pb.agentId})),pa);
+ assert.deepEqual(await authenticatePrincipal(app,request(a.access_token,{'x-mcp-agent-id':pb.agentId})),pa);
  const reconnected=await connect(app,'ALICE');
  assert.equal((await authenticatePrincipal(app,request(reconnected.access_token))).agentId,pa.agentId);
  await assert.rejects(refresh(app,a),/Invalid refresh token/);
@@ -156,10 +156,10 @@ test('actual Postgres SQL: registry registration and session binding commit atom
 
 test('whoami exposes peers or unregistered, never legacy storage owner or admin role',async()=>{
  const {App,tools}=await import('../src/app.js');const f=fixture();const app=new App({store:f.store,instanceKey:apiKey,origin:f.origin});
- assert.deepEqual(await app.invoke(owner,'agent_whoami',{},root),{registered:false,agent_id:null,server_version:'0.6.14',tool_profile:'bootstrap',available_tool_names:tools.map(t=>t.name)});
+ assert.deepEqual(await app.invoke(owner,'agent_whoami',{},root),{registered:false,agent_id:null,server_version:'0.6.15',tool_profile:'bootstrap',available_tool_names:tools.map(t=>t.name)});
  const agent=await registerAgent(app,root,{handle:'peer',display_name:'Before'});
  const principal={...root,agentId:agent.agent_id};const before=await app.invoke(owner,'agent_whoami',{},principal);
- assert.equal(before.registered,true);assert.equal(before.agent_id,agent.agent_id);assert(!('role' in before));assert(!('instance_id' in before));assert(!JSON.stringify(before).includes('asp:admin'));
+ assert.equal(before.registered,true);assert.equal(before.agent_id,agent.agent_id);assert(!('role' in before));assert(!('instance_id' in before));assert(!JSON.stringify(before).includes('mcp:admin'));
  assert.equal(before.agent_token,undefined);assert.equal(before.tokenHash,undefined);assert(!JSON.stringify(before).includes(agent.agent_token));
  await f.store.put('bot','old-bot',{owner,active:true});await f.store.put('chat','existing',{owner,agent_ids:[agent.agent_id]});
  await registerAgent(app,principal,{handle:'peer',display_name:'After'});const after=await app.invoke(owner,'agent_whoami',{},principal);

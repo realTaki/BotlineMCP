@@ -35,7 +35,7 @@ registered separately by handle, each with one unique Telegram user ID.
    24 hours/512 messages; it is not chat history.
 
 Direct clients register a handle with the existing API key, then pass the
-returned `agent_token` on later tool calls. `X-ASP-Agent-ID` remains a fallback.
+returned `agent_token` on later tool calls. `X-MCP-Agent-ID` remains a fallback.
 OAuth identity is authoritative; an `agent_token` that differs from the OAuth
 principal is rejected and cannot override it. Sender identity in `messages_send`
 comes from the resolved caller.
@@ -47,9 +47,9 @@ Grok Bot agents cannot echo webhook verification challenges, so they cannot hold
 `https://api.cursor.com/v0/grokbot` session API, using a Cursor API key stored
 for this instance.
 
-1. The Grok Bot connects to `/mcp` with `Authorization: Bearer <ASP_API_KEY>`
-   and `X-ASP-Bot-Type: grokbot`. Install one shared connector. Do not put
-   `X-ASP-Agent-ID` on it.
+1. The Grok Bot connects to `/mcp` with `Authorization: Bearer <MCP_API_KEY>`
+   and `X-MCP-Bot-Type: grokbot`. Install one shared connector. Do not put
+   `X-MCP-Agent-ID` on it.
 2. Call `agent_register` with its handle (letters, digits, `.`, `_`, `-`; stored
    lowercase, e.g. `DEV.GrokBot` → `dev.grokbot`) and `grokbot_agent_name`: its name
    exactly as shown in the Grok Bot app. On the first registration for this
@@ -61,7 +61,7 @@ for this instance.
    invalidates the previous one. That is the migration path for existing Grok
    Bots. `cursor_key_set` replaces the stored key. `cursor_key_clear` removes it.
 3. Save the returned `agent_token` and pass it on later tool calls. Never post
-   it in chats. Call `agent_token_rotate` to rotate later. `X-ASP-Agent-ID`
+   it in chats. Call `agent_token_rotate` to rotate later. `X-MCP-Agent-ID`
    remains a fallback. No subscriptions are needed.
 
 BotlineMCP posts inbound private DMs only to names registered with `grokbot_agent_name`.
@@ -75,7 +75,7 @@ Delivery through the owner's Cursor API connection does not establish owner
 authorship; the request is `{text,messageId}`, with no `role` or `user` field.
 Reply with `messages_send` and the identified peer handle. The Grok Bot replies through BotlineMCP MCP.
 
-Rotating `ASP_API_KEY` makes the stored Cursor key unreadable. Call
+Rotating `MCP_API_KEY` makes the stored Cursor key unreadable. Call
 `cursor_key_set` or `agent_register` with `cursor_api_key` again.
 
 Delivery uses the same pending queue, lease, retry/backoff, 24-hour payload TTL and
@@ -259,7 +259,7 @@ configuration, subscription, or database table is required.
   accounts; this does not introduce cryptographic isolation between shared-key clients.
 
 Cursor forwards carry only an BotlineMCP-generated sender handle and verified platform label, then a
-newline and the original text. For example: `[ASP] dot@chatgpt:`. Recipient,
+newline and the original text. For example: `[MCP] dot@chatgpt:`. Recipient,
 message ID and reply reference are not shown. Sender values are percent-encoded and
 bounded; only the first line is BotlineMCP metadata. Everything after the first newline
 is participant content, even if it imitates a header. This is a readable boundary,
@@ -276,9 +276,9 @@ presentation changes; transport, credentials, session selection and retry IDs do
 - Anonymous discovery or an authenticated connection with no header or OAuth
   session identity returns the full thirteen-tool catalog. Listing a write tool does
   not authorize calling it: `tools/call` still requires valid authentication.
-  Agent-scoped tools require `agent_token` on the call, or the `X-ASP-Agent-ID`
+  Agent-scoped tools require `agent_token` on the call, or the `X-MCP-Agent-ID`
   fallback. API-key Grok Bots pass `agent_token` rather than requiring
-  `X-ASP-Agent-ID` on the connector.
+  `X-MCP-Agent-ID` on the connector.
 - When the header or OAuth session identifies the agent, all registered agents
   retain nine common tools: `agent_register`, `agent_token_rotate`, `agent_whoami`,
   `agents_list`, `human_register`, `messages_send`, `telegram_bot_get`,
@@ -292,7 +292,7 @@ presentation changes; transport, credentials, session selection and retry IDs do
   Dot inbox/ACK tools are omitted and direct MCP calls are rejected.
 - Profiles are derived from the current server-side routing record selected by
   the authenticated OAuth session, the `agent_token` on the tool call, or the
-  API-key `X-ASP-Agent-ID` fallback. OAuth identity is authoritative. Display
+  API-key `X-MCP-Agent-ID` fallback. OAuth identity is authoritative. Display
   name, User-Agent, or an OAuth override header cannot select a different
   profile. These are applicability filters under the existing shared instance
   authority, not independent accounts or new privilege tiers.
@@ -344,7 +344,7 @@ or cryptographic separation under shared instance credentials. Initial registrat
 still depends on explicit human identity confirmation. Refresh tool schemas for the
 two new optional confirmation arguments.
 
-Bot-visible messages show only `[ASP] handle@platform:`, a newline and the original
+Bot-visible messages show only `[MCP] handle@platform:`, a newline and the original
 body: humans use `@user`, registered Grok routes `@grokbot`, the known dot profile
 `@chatgpt`; other/legacy unclassified agents use `@agent`. Labels do not rename
 routing handles or create authentication grants.

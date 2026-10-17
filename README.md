@@ -3,12 +3,13 @@
 [GitHub repository](https://github.com/realTaki/BotlineMCP)
 
 A self-hosted, single-owner relay between agents and Telegram private messages.
-This documentation targets source version **0.6.14**. BotlineMCP is the public project
-name; existing ASP environment variables and protocol identifiers are retained for
-compatibility. The `ASP_API_KEY`, `X-ASP-*` headers, `asp_at_` token prefix and
-`[ASP]` routing envelope remain protocol names. The existing internal encryption
-derivation label and database namespace are also retained, so a branding change
-does not make encrypted working credentials unreadable.
+This documentation targets source version **0.6.15**. Configure `MCP_API_KEY`,
+use `X-MCP-*` client headers, and identify forwarded messages by the `[MCP]`
+routing line. Newly issued agent tokens use the `mcp_at_` prefix.
+
+Deploy this release as a fresh installation with its own database and production
+configuration. Follow the setup steps below, then register your agents and human
+participants and configure the intended message routes.
 
 The owner reports verified use with **ChatGPT dot, xAI Grokbot and Telegram**.
 Other agents have not been verified; protocol extensibility is not a compatibility
@@ -68,7 +69,7 @@ npm run check
 npm test
 ```
 
-Provide `ASP_API_KEY` and `DATABASE_URL` securely in the process environment, then
+Provide `MCP_API_KEY` and `DATABASE_URL` securely in the process environment, then
 run `npm start`. The development server listens on `127.0.0.1:3000` and overrides
 its origin to `http://localhost:3000`. It does not load `.env` files automatically.
 A local HTTP server alone cannot receive public Telegram or agent callbacks.
@@ -80,7 +81,7 @@ Tests mock remote transport and use PGlite for actual SQL; they need no live key
    and Framework Other with no build step.
 2. Connect a dedicated Postgres integration and verify that its connection URL is
    available to the project. Provisioning a database is a separate infrastructure step.
-3. Set `ASP_API_KEY` as a production secret. Generate a high-entropy key locally,
+3. Set `MCP_API_KEY` as a production secret. Generate a high-entropy key locally,
    for example with `openssl rand -hex 32`, and save it in your credential manager.
    Never paste it into an issue, message, screenshot or committed file.
 4. Enable Vercel system environment variables. The code derives the HTTPS origin
@@ -93,7 +94,7 @@ Tests mock remote transport and use PGlite for actual SQL; they need no live key
 
 Environment settings:
 
-- `ASP_API_KEY`: required random secret, at least 32 characters; use substantially
+- `MCP_API_KEY`: required random secret, at least 32 characters; use substantially
   more entropy than a human password. Also derives the stored-secret encryption key.
 - `DATABASE_URL`: Postgres connection URL; `POSTGRES_URL` is an accepted fallback.
 - `VERCEL_PROJECT_PRODUCTION_URL`: production hostname supplied by Vercel, without
@@ -126,19 +127,19 @@ can instead use `existing_bot_id` without exporting its token.
 
 ### Direct clients and xAI Grokbot
 
-Direct clients authenticate with `Authorization: Bearer <ASP_API_KEY>` and register
+Direct clients authenticate with `Authorization: Bearer <MCP_API_KEY>` and register
 a stable handle. Store the returned `agent_token` securely; it is shown once and
 selects identity on later calls, but does not replace the Bearer credential.
-`X-ASP-Agent-ID` remains a direct-client fallback. An OAuth session's registered
+`X-MCP-Agent-ID` remains a direct-client fallback. An OAuth session's registered
 identity is authoritative and cannot be overridden by a different agent token.
 
-For Grok Bot, use `X-ASP-Bot-Type: grokbot` and register the intended
+For Grok Bot, use `X-MCP-Bot-Type: grokbot` and register the intended
 `grokbot_agent_name`. Configure the Cursor key only through an approved secure
 credential path. Multiple Grok Bot registrations can use the stored account key.
 The destination is the registered session name, not arbitrary text supplied by an
 incoming sender. No `agent.notification` subscription is required for this route.
 
-`X-ASP-Bot-Type: dot` or `grokbot` filters discovery; calls must match the registered
+`X-MCP-Bot-Type: dot` or `grokbot` filters discovery; calls must match the registered
 profile. The full catalog contains thirteen tools. Unidentified discovery can expose that
 catalog, but protected calls
 still require authentication. After registration inspect `agent_whoami` fields

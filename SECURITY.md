@@ -14,7 +14,7 @@ Only test instances you own or are authorized to assess.
 
 ## Threat model
 
-- A deployment serves one owner and trusted agent software. `ASP_API_KEY` confers
+- A deployment serves one owner and trusted agent software. `MCP_API_KEY` confers
   instance-wide authority. Agent tokens, handles and filtered tool catalogs do not
   establish independent tenants or a least-privilege permission model.
 - OAuth uses PKCE, short-lived access tokens and rotating refresh credentials.
@@ -57,7 +57,7 @@ limits and monitor capacity and delivery failures without retaining message bodi
 in diagnostics. Review retention for OAuth records, old receipts and legacy data. Public OAuth
 registration and consent endpoints currently lack application-wide throttling and
 general TTL cleanup; restrict abuse at the hosting layer and address storage growth.
-Version 0.6.14 uses fixed descriptions for Grok Bot API errors rather than
+Version 0.6.15 uses fixed descriptions for Grok Bot API errors rather than
 reflecting upstream response bodies. Maintain this boundary in future adapters.
 
 The 24-hour pending-message TTL is not an idle-time physical deletion guarantee;

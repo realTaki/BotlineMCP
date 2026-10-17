@@ -9,7 +9,7 @@ const atom=v=>encodeURIComponent(String(v??'unknown').slice(0,200));
 export function grokbotText(event){
  const d=event.data,from=d.sender;
  const platform=from?.kind==='human'?'user':from?.kind==='agent'&&['grokbot','chatgpt'].includes(from.platform)?from.platform:'agent';
- const header=`[ASP] ${atom(from?.handle??from?.id)}@${platform}:`;
+ const header=`[MCP] ${atom(from?.handle??from?.id)}@${platform}:`;
  return header+'\n'+(event.name==='message.created'?d.text:'');
 }
 

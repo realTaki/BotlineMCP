@@ -7,7 +7,7 @@ import {DotInbox,DOT_INBOX_POLICY} from '../src/dot-inbox.js';
 import {Dms,DM_POLICY} from '../src/dms.js';
 import {registerAgent} from '../src/agents.js';
 import {configureHuman} from '../src/telegram-owner.js';
-const owner='asp:admin',secret='whsec_'+Buffer.alloc(32,8).toString('base64');
+const owner='mcp:admin',secret='whsec_'+Buffer.alloc(32,8).toString('base64');
 class MemoryStore {
  constructor(){this.data=new Map();this.queue=Promise.resolve();}
  async get(k,id){return structuredClone(this.data.get(k+':'+id));}
@@ -22,7 +22,7 @@ class MemoryStore {
  async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
 }
 async function fixture(store=new MemoryStore()){
- const events=[],telegram=[];const app=new App({store,instanceKey:'x'.repeat(64),key:Buffer.alloc(32,7).toString('base64'),origin:'https://asp.example',post:async(url,h,body)=>{const e=JSON.parse(body);if(e.type!=='verification')events.push({url,event:e});return {status:200,body:JSON.stringify({challenge:e.challenge})};},telegram:async(t,method,args)=>{telegram.push({method,args});return {message_id:9};}});
+ const events=[],telegram=[];const app=new App({store,instanceKey:'x'.repeat(64),key:Buffer.alloc(32,7).toString('base64'),origin:'https://mcp.example',post:async(url,h,body)=>{const e=JSON.parse(body);if(e.type!=='verification')events.push({url,event:e});return {status:200,body:JSON.stringify({challenge:e.challenge})};},telegram:async(t,method,args)=>{telegram.push({method,args});return {message_id:9};}});
  const principals=[];for(const handle of ['alpha','bravo','charlie']){const a=await registerAgent(app,{owner,authType:'api_key'},{handle});principals.push({owner,agentId:a.agent_id,handle,authType:'api_key'});}
  return {store,app,g:new Dms(app),events,telegram,a:principals[0],b:principals[1],c:principals[2]};
 }

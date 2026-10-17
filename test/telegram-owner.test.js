@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {configureHuman,getHuman,listHumans,getHumanByTelegramId,humanKey,TelegramOwner} from '../src/telegram-owner.js';
-const owner='asp:admin',agentId='synthetic-agent';
+const owner='mcp:admin',agentId='synthetic-agent';
 class MemoryStore{
  constructor(){this.data=new Map();this.calls=[];this.tail=Promise.resolve();}
  async get(k,id){return structuredClone(this.data.get(k+':'+id));}

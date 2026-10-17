@@ -87,7 +87,7 @@ test('actual Postgres SQL: denied reservation rollback cannot leave partial rece
  const {db,store}=await transactionalStore();
  try{
   await store.put('bot','123',{id:'123',owner:'one',active:true});
-  const connect=store.pool.connect;store.pool.connect=async()=>{const c=await connect();return{...c,query:async(sql,args)=>{if(sql.startsWith('UPDATE asp_records SET value=$2'))throw Error('synthetic intent write failure');return c.query(sql,args);}};};
+  const connect=store.pool.connect;store.pool.connect=async()=>{const c=await connect();return{...c,query:async(sql,args)=>{if(sql.startsWith('UPDATE mcp_records SET value=$2'))throw Error('synthetic intent write failure');return c.query(sql,args);}};};
   await assert.rejects(store.reserveDeniedReply('123',1,'43','42'),/synthetic intent write failure/);
   assert.equal(await store.get('update','123:1'),undefined);assert.equal(await store.get('denied_limit','123'),undefined);
   store.pool.connect=connect;assert.equal(await store.reserveDeniedReply('123',1,'43','42'),true);

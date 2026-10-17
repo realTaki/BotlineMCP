@@ -7,7 +7,7 @@ and final publication scope before release.
 
 ## Scope and source provenance
 
-The draft describes the 0.6.14 source snapshot. Record the exact reviewed source
+The draft describes the 0.6.15 source snapshot. Record the exact reviewed source
 commit and exported file manifest in release evidence, without copying private
 operational logs or Git history into the public release.
 
@@ -104,8 +104,8 @@ Before release confirm:
 - Security reporting accurately describes available options; no fabricated contact or
   unverified enabled advisory endpoint is published.
 
-Known code-review follow-ups are separate from this documentation-only draft:
+Known code-review follow-ups are separate from this naming release:
 protection against unbounded public OAuth registration/consent rows and explicit
-long-term OAuth/legacy retention. Version 0.6.14 replaces reflected upstream errors
-with fixed descriptions and corrects OAuth consent to describe private DMs. Configure platform-level rate limits, but do not represent
+long-term OAuth/legacy retention. Version 0.6.14 replaced reflected upstream errors
+with fixed descriptions and corrected OAuth consent to describe private DMs. Configure platform-level rate limits, but do not represent
 that as proof these application-level issues have been fixed.

@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {hash} from '../src/security.js';
 
-const owner='asp:admin',botId='123456',handle='synthetic-agent',agentId='agent_'+hash(JSON.stringify([owner,handle]));
+const owner='mcp:admin',botId='123456',handle='synthetic-agent',agentId='agent_'+hash(JSON.stringify([owner,handle]));
 const listenerId=hash(JSON.stringify([agentId,'chat.created',null]));
 const document=await readFile(new URL('../docs/legacy-bot-migration.md',import.meta.url),'utf8');
 function documentedSql(marker,values={botId,handle}){
@@ -13,9 +13,9 @@ function documentedSql(marker,values={botId,handle}){
  assert(sql,'Expected the actual documented SQL block');
  return sql.replaceAll('<bot_id>',values.botId).replaceAll('<agent_handle>',values.handle);
 }
-async function put(db,kind,id,value){await db.query('INSERT INTO asp_records(kind,id,value) VALUES($1,$2,$3) ON CONFLICT(kind,id) DO UPDATE SET value=EXCLUDED.value',[kind,id,JSON.stringify(value)]);}
-async function get(db,kind,id){return (await db.query('SELECT value FROM asp_records WHERE kind=$1 AND id=$2',[kind,id])).rows[0]?.value;}
-async function snapshot(db){return (await db.query('SELECT kind,id,value FROM asp_records ORDER BY kind,id')).rows;}
+async function put(db,kind,id,value){await db.query('INSERT INTO mcp_records(kind,id,value) VALUES($1,$2,$3) ON CONFLICT(kind,id) DO UPDATE SET value=EXCLUDED.value',[kind,id,JSON.stringify(value)]);}
+async function get(db,kind,id){return (await db.query('SELECT value FROM mcp_records WHERE kind=$1 AND id=$2',[kind,id])).rows[0]?.value;}
+async function snapshot(db){return (await db.query('SELECT kind,id,value FROM mcp_records ORDER BY kind,id')).rows;}
 async function fixture(){
  const db=new PGlite();await db.exec(await readFile(new URL('../schema.sql',import.meta.url),'utf8'));
  const bot={id:botId,owner,active:true,token:'synthetic-encrypted-bot-token',hookSecret:'synthetic-hook-secret',users:['42'],chats:['42','-100'],ownedChats:{'-100':{handle:'synthetic-human',telegram_user_id:'42'}},username:'synthetic_bot'};
@@ -50,23 +50,23 @@ test('documented migration inserts only routing metadata and is idempotent',asyn
 });
 test('documented migration refuses absent or ambiguous agents and never creates authentication records',async()=>{
  const f=await fixture();try{
-  await f.db.query("DELETE FROM asp_records WHERE kind='agent' AND id=$1",[agentId]);await rejected(f.db,/Exactly one normally registered agent/);
+  await f.db.query("DELETE FROM mcp_records WHERE kind='agent' AND id=$1",[agentId]);await rejected(f.db,/Exactly one normally registered agent/);
   await put(f.db,'agent',agentId,f.agent);await put(f.db,'agent','duplicate-agent',{...f.agent,agentId:'duplicate-agent'});await rejected(f.db,/Exactly one normally registered agent/);
-  await f.db.query("DELETE FROM asp_records WHERE kind='agent' AND id='duplicate-agent'");await put(f.db,'agent',agentId,{...f.agent,agentId:'inconsistent'});await rejected(f.db,/identity is inconsistent/);
+  await f.db.query("DELETE FROM mcp_records WHERE kind='agent' AND id='duplicate-agent'");await put(f.db,'agent',agentId,{...f.agent,agentId:'inconsistent'});await rejected(f.db,/identity is inconsistent/);
  }finally{await f.db.close();}
 });
 test('documented migration requires an active token-bearing bot and canonical generic main listener',async()=>{
  const f=await fixture();try{
   for(const patch of [{active:false},{token:null},{token:''},{unbound:true}]){await put(f.db,'bot',botId,{...f.bot,...patch});await rejected(f.db,/Bot must be active/);}await put(f.db,'bot',botId,f.bot);
   for(const patch of [{name:'chat.created'},{chatId:'some-chat'},{expires:0},{owner:'foreign-owner'},{secret:''},{url:''},{agentId:'other-agent'}]){await put(f.db,'group_subscription',listenerId,{...f.listener,...patch});await rejected(f.db,/unexpired main agent.notification listener/);}
-  await f.db.query("DELETE FROM asp_records WHERE kind='group_subscription' AND id=$1",[listenerId]);await put(f.db,'group_subscription','noncanonical-listener',f.listener);await rejected(f.db,/unexpired main agent.notification listener/);
+  await f.db.query("DELETE FROM mcp_records WHERE kind='group_subscription' AND id=$1",[listenerId]);await put(f.db,'group_subscription','noncanonical-listener',f.listener);await rejected(f.db,/unexpired main agent.notification listener/);
  }finally{await f.db.close();}
 });
 test('documented migration rejects other bot ownership and cross-handle or cross-owner reassignment',async()=>{
  const f=await fixture();try{
   await put(f.db,'group_bot','654321',{owner,agentId,bindingId:'synthetic-other-generation'});await rejected(f.db,/already has another bot/);
   assert.equal((await f.db.query(documentedSql('inspect'))).rows[0].other_bot_for_handle,true);
-  await f.db.query("DELETE FROM asp_records WHERE kind='group_bot' AND id='654321'");
+  await f.db.query("DELETE FROM mcp_records WHERE kind='group_bot' AND id='654321'");
   for(const route of [{owner,agentId:'other-agent',bindingId:'synthetic-generation'},{owner:'foreign-owner',agentId,bindingId:'synthetic-generation'}]){await put(f.db,'group_bot',botId,route);await rejected(f.db,/already assigned to another agent/);}
  }finally{await f.db.close();}
 });

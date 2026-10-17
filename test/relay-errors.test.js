@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {RelayErrors,relayErrorDetails,RELAY_ERROR_POLICY} from '../src/relay-errors.js';
 import {hash} from '../src/security.js';
-const owner='asp:admin',agentId='agent-errors',chatId='chat-errors',secret='whsec_'+Buffer.alloc(32,8).toString('base64');
+const owner='mcp:admin',agentId='agent-errors',chatId='chat-errors',secret='whsec_'+Buffer.alloc(32,8).toString('base64');
 class MemoryStore{
  constructor(){this.data=new Map();this.locks=new Map();}
  async get(k,id){return structuredClone(this.data.get(k+':'+id));}

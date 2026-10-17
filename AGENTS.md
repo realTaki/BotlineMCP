@@ -14,13 +14,13 @@
   explicit `messages_ack`; callback success must not discard dot inbox payloads.
   There is no per-group listener. Keep context in that bound conversation.
   BotlineMCP must not pretend to create platform tasks or retain a recoverable chat history.
-- When no X-BotlineMCP-Bot-Type, X-BotlineMCP-Agent-ID, or OAuth session identifies a profile,
+- When no X-MCP-Bot-Type, X-MCP-Agent-ID, or OAuth session identifies a profile,
   tools/list returns the full catalog and callers pass their own agent_token on
-  tool calls. X-BotlineMCP-Bot-Type of dot or grokbot filters tools/list to that connector
+  tool calls. X-MCP-Bot-Type of dot or grokbot filters tools/list to that connector
   type. Profile filtering also applies when the header or OAuth session
   identifies the agent: dot common tools plus inbox/ACK, other agents common
   tools plus Cursor helpers. Resolve identity first on tools/call, then enforce
-  the resolved agent's profile; a present X-BotlineMCP-Bot-Type must match that
+  the resolved agent's profile; a present X-MCP-Bot-Type must match that
   registered type. Preserve the explicit authenticated unlisted legacy-send
   exception. Profiles are not independent privileges. OAuth identity is
   authoritative and a differing agent_token cannot override it.
@@ -37,7 +37,7 @@
   human registry. Confirm identity explicitly; never infer it from an incoming
   message or display name. Replacements require the current-ID guard. Call
   `human_register` once; that human may private-DM every bound bot. Give
-  `ASP_API_KEY` only to trusted agent software.
+  `MCP_API_KEY` only to trusted agent software.
 - Ignore Telegram groups and supergroups. Handle-bound bots relay private DMs
   from registered humans only. Anonymous senders, self echoes and unregistered
   humans must not acquire a registered human's authority. Unregistered private

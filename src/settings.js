@@ -2,7 +2,7 @@ import {INSTANCE_ID} from './config.js';
 import {getAgent,normalizeAgentHandle} from './agents.js';
 import {escapeHtml,hash,nonce,requireThat,same} from './security.js';
 
-const COOKIE='__Host-asp-settings';
+const COOKIE='__Host-mcp-settings';
 const SESSION_KIND='settings_session';
 const SESSION_MS=10*60*1000;
 const MAX_FORM_BYTES=8192;
@@ -15,7 +15,7 @@ function page(title,body) {
 }
 
 function loginForm(origin) {
-  return page('Settings',`<h1>Settings</h1><p>Sign in to this private BotlineMCP instance before adding a Telegram bot.</p><p class="note">${TOKEN_LABEL} means this instance’s long-lived ASP_API_KEY. It grants authority over every bot in this instance. Enter it only on ${escapeHtml(origin)}. Never paste credentials into chat.</p><form method="post" action="/settings/login" autocomplete="off"><label for="api-key">${TOKEN_LABEL}<input id="api-key" type="password" name="api_key" maxlength="1024" autocomplete="off" spellcheck="false" autocapitalize="none" required></label><button type="submit">Continue</button></form>`);
+  return page('Settings',`<h1>Settings</h1><p>Sign in to this private BotlineMCP instance before adding a Telegram bot.</p><p class="note">${TOKEN_LABEL} means this instance’s long-lived MCP_API_KEY. It grants authority over every bot in this instance. Enter it only on ${escapeHtml(origin)}. Never paste credentials into chat.</p><form method="post" action="/settings/login" autocomplete="off"><label for="api-key">${TOKEN_LABEL}<input id="api-key" type="password" name="api_key" maxlength="1024" autocomplete="off" spellcheck="false" autocapitalize="none" required></label><button type="submit">Continue</button></form>`);
 }
 
 function botForm(session) {

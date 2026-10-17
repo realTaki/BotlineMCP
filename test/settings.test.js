@@ -5,12 +5,12 @@ import {readFile} from 'node:fs/promises';
 import {App,handler} from '../src/app.js';
 import {hash} from '../src/security.js';
 
-const origin='https://asp.example.com';
+const origin='https://mcp.example.com';
 const apiKey='synthetic-settings-api-key-'.padEnd(48,'x');
 const token='123:'+'synthetic_bot_token_'.repeat(2);
 const agentHandle='settings-agent';
-const agentId='agent_'+hash(JSON.stringify(['asp:admin',agentHandle]));
-const cookieName='__Host-asp-settings';
+const agentId='agent_'+hash(JSON.stringify(['mcp:admin',agentHandle]));
+const cookieName='__Host-mcp-settings';
 const formHeaders={'content-type':'application/x-www-form-urlencoded',origin};
 class MemoryStore {
   constructor(){this.data=new Map();this.locks=new Map();}
@@ -26,7 +26,7 @@ class MemoryStore {
 }
 function fixture(){
   const store=new MemoryStore(),calls=[];
-  store.data.set('agent:'+agentId,{owner:'asp:admin',agentId,handle:agentHandle,displayName:'Settings Agent',created:new Date().toISOString()});
+  store.data.set('agent:'+agentId,{owner:'mcp:admin',agentId,handle:agentHandle,displayName:'Settings Agent',created:new Date().toISOString()});
   const app=new App({store,key:Buffer.alloc(32,7).toString('base64'),instanceKey:apiKey,origin,telegram:async(t,method,args)=>{calls.push({method,args});if(method==='getMe')return{id:123,is_bot:true,username:'synthetic_bot'};if(method==='getWebhookInfo')return{url:''};return true;}});
   return{store,app,calls};
 }
@@ -50,7 +50,7 @@ async function submit(f,session,headers={},fields={}){
 function assertNoSecrets(value,...secrets){for(const secret of secrets)assert(!JSON.stringify(value).includes(secret));}
 
 test('Settings initially shows only API KEY and protected bot form requires authentication',async()=>{
-  const f=fixture(),page=await request(f.app,'/settings');assert.equal(page.status,200);assert.match(page.body,/API KEY/);assert.match(page.body,/ASP_API_KEY/);assert(!page.body.includes('name="token"'));assert(!page.body.includes('Telegram Bot Token'));assert(!page.body.includes('name="agent_handle"'));
+  const f=fixture(),page=await request(f.app,'/settings');assert.equal(page.status,200);assert.match(page.body,/API KEY/);assert.match(page.body,/MCP_API_KEY/);assert(!page.body.includes('name="token"'));assert(!page.body.includes('Telegram Bot Token'));assert(!page.body.includes('name="agent_handle"'));
   assert.equal((await request(f.app,'/settings/bot')).status,401);
   assert.equal((await request(f.app,'/settings/bind','POST',new URLSearchParams({csrf:'wrong',token}).toString(),formHeaders)).status,401);
   assert.equal(f.calls.length,0);
@@ -59,7 +59,7 @@ test('Settings initially shows only API KEY and protected bot form requires auth
 
 test('Settings login rejects incorrect API keys and OAuth/agent credentials',async()=>{
   const f=fixture();await f.store.put('agent_auth',hash('agent-token'.padEnd(48,'x')),{owner:'retired-agent'});
-  const oauthToken='oauth-token'.padEnd(48,'x');await f.store.put('access',hash(oauthToken),{owner:'asp:admin',resource:origin+'/mcp',expires:Date.now()+60000});
+  const oauthToken='oauth-token'.padEnd(48,'x');await f.store.put('access',hash(oauthToken),{owner:'mcp:admin',resource:origin+'/mcp',expires:Date.now()+60000});
   for(const credential of ['wrong-key'.padEnd(48,'x'),'agent-token'.padEnd(48,'x'),oauthToken]){
     const result=await request(f.app,'/settings/login','POST',new URLSearchParams({api_key:credential}).toString(),formHeaders);
     assert.equal(result.status,401);assertNoSecrets(result,credential);assert(!result.body.includes('name="token"'));
@@ -85,7 +85,7 @@ test('Successful login stores only hashed session token and restricts the cookie
 
 test('Every Settings POST rejects missing, null and foreign Origin without consuming a session',async()=>{
   const f=fixture(),s=await login(f);
-  for(const badOrigin of [undefined,'null','https://foreign.example','https://asp.example.com.attacker.test',origin+'/']){
+  for(const badOrigin of [undefined,'null','https://foreign.example','https://mcp.example.com.attacker.test',origin+'/']){
     const loginHeaders={...formHeaders,origin:badOrigin};if(badOrigin===undefined)delete loginHeaders.origin;
     assert.equal((await request(f.app,'/settings/login','POST',new URLSearchParams({api_key:apiKey}).toString(),loginHeaders)).status,403);
     assert.equal((await submit(f,s,{origin:badOrigin})).status,403);
@@ -134,7 +134,7 @@ test('Binding consumes a single-use session, returns no credentials, and tells t
   assert.equal(result.status,200);assert.match(result.body,/Bot bound/);assert.match(result.body,/123 \(@synthetic_bot\)/);assertNoSecrets(result,apiKey,token,s.token,s.csrf);
   assert.match(result.body,/human_register once/);assert.match(result.body,/Registered humans can DM every bound bot/);assert(!result.body.includes('telegram_whitelist_update'));
   assert.match(result.headers['set-cookie'],/Max-Age=0$/);assert.equal(await f.store.get('settings_session',hash(s.token)),undefined);
-  const bot=await f.store.get('bot','123');assert.equal(bot.owner,'asp:admin');assert.equal(bot.active,true);assert.equal((await f.store.get('group_bot','123')).agentId,agentId);assert.equal(bot.users,undefined);assert.equal(bot.chats,undefined);assertNoSecrets(bot,token);
+  const bot=await f.store.get('bot','123');assert.equal(bot.owner,'mcp:admin');assert.equal(bot.active,true);assert.equal((await f.store.get('group_bot','123')).agentId,agentId);assert.equal(bot.users,undefined);assert.equal(bot.chats,undefined);assertNoSecrets(bot,token);
   assert.equal(f.calls.filter(c=>c.method==='setWebhook').length,1);
   assert.equal((await submit(f,s)).status,401);assert.equal((await request(f.app,'/settings/bot','GET','',{cookie:s.cookie})).status,401);assert.equal(f.calls.filter(c=>c.method==='setWebhook').length,1);
 });
@@ -158,10 +158,10 @@ test('Telegram failure consumes the session without echoing errors or retrying a
 });
 
 test('Settings rebind writes token and webhook without allowlists',async()=>{
-  const f=fixture();await f.app.bind('asp:admin',{token},{agentId});
+  const f=fixture();await f.app.bind('mcp:admin',{token},{agentId});
   let s=await login(f);assert.equal((await submit(f,s)).status,200);assert.equal((await f.store.get('bot','123')).active,true);assert.equal((await f.store.get('bot','123')).users,undefined);
   s=await login(f);assert.equal((await submit(f,s)).status,200);assert.equal((await f.store.get('bot','123')).active,true);
-  await f.app.invoke('asp:admin','telegram_bot_bind',{token},{owner:'asp:admin',agentId,authType:'api_key'});assert.equal((await f.store.get('bot','123')).active,true);
+  await f.app.invoke('mcp:admin','telegram_bot_bind',{token},{owner:'mcp:admin',agentId,authType:'api_key'});assert.equal((await f.store.get('bot','123')).active,true);
 });
 
 test('Settings cannot replace another webhook or take ownership of another agent bot',async()=>{
@@ -195,7 +195,7 @@ test('Binding requires an existing same-owner handle without auto-selecting or c
   }
   // Even a malformed registry record stored at the expected lookup key cannot
   // cross the instance-owner boundary.
-  const foreignId='agent_'+hash(JSON.stringify(['asp:admin','foreign-agent']));
+  const foreignId='agent_'+hash(JSON.stringify(['mcp:admin','foreign-agent']));
   await f.store.put('agent',foreignId,{owner:'other-owner',agentId:foreignId,handle:'foreign-agent'});
   assert.equal((await submit(f,s,{}, {agent_handle:'foreign-agent'})).status,400);
   assert(await f.store.get('settings_session',hash(s.token)));
@@ -207,7 +207,7 @@ test('Existing API-key session binds the selected normalized handle',async()=>{
   f.app.bind=async(owner,args,options)=>{called={owner,args,options};return {bot_id:'123',username:'synthetic_bot'};};
   const result=await submit(f,s,{}, {agent_handle:' SETTINGS-AGENT '});
   assert.equal(result.status,200);
-  assert.deepEqual(called,{owner:'asp:admin',args:{token},options:{agentId}});
+  assert.deepEqual(called,{owner:'mcp:admin',args:{token},options:{agentId}});
   assert.equal((await f.store.list('agent')).length,1);
   assert.equal((await f.store.list('agent_session')).length,0);
   assert.equal(await f.store.get('settings_session',hash(s.token)),undefined);
@@ -226,14 +226,14 @@ test('Settings cannot give one handle a second bot or move its bot to another ha
   const original=await f.store.get('group_bot','123');const before=f.calls.length;
   s=await login(f);assert.equal((await submit(f,s,{}, {token:'456:'+token.split(':')[1]})).status,502);
   assert.equal(f.calls.length,before);assert.equal(await f.store.get('bot','456'),undefined);
-  const otherHandle='other-settings-agent',otherId='agent_'+hash(JSON.stringify(['asp:admin',otherHandle]));
-  await f.store.put('agent',otherId,{owner:'asp:admin',agentId:otherId,handle:otherHandle,displayName:'Other',created:new Date().toISOString()});
+  const otherHandle='other-settings-agent',otherId='agent_'+hash(JSON.stringify(['mcp:admin',otherHandle]));
+  await f.store.put('agent',otherId,{owner:'mcp:admin',agentId:otherId,handle:otherHandle,displayName:'Other',created:new Date().toISOString()});
   s=await login(f);assert.equal((await submit(f,s,{}, {agent_handle:otherHandle})).status,502);
   assert.equal(f.calls.length,before);assert.deepEqual(await f.store.get('group_bot','123'),original);
 });
 
 test('Failed Settings rebind leaves an existing bot durably inactive without restoring old state',async()=>{
-  const f=fixture();await f.app.bind('asp:admin',{token},{agentId});
+  const f=fixture();await f.app.bind('mcp:admin',{token},{agentId});
   const original=f.app.telegram;f.app.telegram=async(t,method,args)=>{if(method==='setWebhook')throw Error('synthetic uncertain webhook result');return original(t,method,args);};
   const s=await login(f),result=await submit(f,s);
   assert.equal(result.status,502);const bot=await f.store.get('bot','123');

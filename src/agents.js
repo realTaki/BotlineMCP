@@ -67,7 +67,7 @@ export async function registerAgent(app,principal,args={}){
  return {...await getAgent({store},principal.owner,agentId),agent_token};
  });
 }
-const mintAgentToken=()=>'asp_at_'+nonce();
+const mintAgentToken=()=>'mcp_at_'+nonce();
 export const callerTokenProperty={type:'string',minLength:16,maxLength:128,description:'Your per-agent secret from agent_register or agent_token_rotate. Shown once. Store it; never post it in chat.'};
 export async function getAgentByToken(app,owner,token){
  if(typeof token!=='string'||token.trim()==='')return null;
@@ -110,5 +110,5 @@ export async function resolveCallerAgent(app,principal,args={},{optional=false}=
   return agent;
  }
  if(optional)return null;
- requireThat(false,'Pass agent_token on this tool call, or send X-ASP-Agent-ID',400);
+ requireThat(false,'Pass agent_token on this tool call, or send X-MCP-Agent-ID',400);
 }

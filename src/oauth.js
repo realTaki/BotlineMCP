@@ -12,7 +12,7 @@ export async function authenticatePrincipal(app,req){
  if(app.instanceKeyHash&&same(hash(bearer),app.instanceKeyHash)){
   // Explicit selector is allowed only with the shared root credential. It does
   // not narrow its authority and cannot override an OAuth session's identity.
-  const selected=req.headers['x-asp-agent-id'];
+  const selected=req.headers['x-mcp-agent-id'];
   requireThat(selected===undefined||typeof selected==='string'&&await getAgent(app,INSTANCE_ID,selected),'Unknown agent identity',403);
   return {owner:INSTANCE_ID,agentId:selected??null,authType:'api_key'};
  }
@@ -46,7 +46,7 @@ export async function oauth(app,req,path,readBody,send,res){
   requireThat(p.resource===resource&&(!p.scope||p.scope==='bot:manage'),'Invalid resource or scope');
   requireThat(typeof p.state==='string'&&p.state.length<=2048,'State required');
   const ticket=nonce();await app.store.put('consent',hash(ticket),{...p,expires:Date.now()+600000});
-  return send(200,`<!doctype html><meta charset="utf-8"><title>Authorize BotlineMCP</title><h1>Connect your agent</h1><p>This authorizes the requesting client to manage bots, read allowed Telegram messages, send Telegram messages, and exchange private direct messages with logical agents. Enter your API KEY (configured as ASP_API_KEY). Every connected client has the same authority to manage this private relay and all its bot bindings. Logical agent handles identify message senders and recipients; they do not isolate permissions or create separate accounts. After authorization, your agent registers its own stable handle and display name through MCP, then sets up its main notification subscription. No agent identity entry is needed on this page. Never enter a Telegram bot token here. By submitting, you authorize this client to act with the privileges of the credential you enter.</p><p>Return to: ${escapeHtml(p.redirect_uri)}</p><form method="post" action="/oauth/authorize"><input type="hidden" name="ticket" value="${ticket}"><label>API KEY <input type="password" name="credential" autocomplete="off" required></label><button type="submit">Authorize</button></form>`,'text/html; charset=utf-8');
+  return send(200,`<!doctype html><meta charset="utf-8"><title>Authorize BotlineMCP</title><h1>Connect your agent</h1><p>This authorizes the requesting client to manage bots, read allowed Telegram messages, send Telegram messages, and exchange private direct messages with logical agents. Enter your API KEY (configured as MCP_API_KEY). Every connected client has the same authority to manage this private relay and all its bot bindings. Logical agent handles identify message senders and recipients; they do not isolate permissions or create separate accounts. After authorization, your agent registers its own stable handle and display name through MCP, then sets up its main notification subscription. No agent identity entry is needed on this page. Never enter a Telegram bot token here. By submitting, you authorize this client to act with the privileges of the credential you enter.</p><p>Return to: ${escapeHtml(p.redirect_uri)}</p><form method="post" action="/oauth/authorize"><input type="hidden" name="ticket" value="${ticket}"><label>API KEY <input type="password" name="credential" autocomplete="off" required></label><button type="submit">Authorize</button></form>`,'text/html; charset=utf-8');
  }
  if(path==='/oauth/authorize'&&req.method==='POST'){
   requireThat(req.headers.origin===app.origin,'Origin mismatch',403);
