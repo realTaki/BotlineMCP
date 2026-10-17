@@ -54,7 +54,7 @@ export class Store {
   }
   async take(kind,id) { return (await this.pool.query('DELETE FROM mcp_records WHERE kind=$1 AND id=$2 RETURNING value',[kind,id])).rows[0]?.value; }
   async pruneDeniedReplies(now=Date.now()) {
-    await this.pool.query(`DELETE FROM mcp_records WHERE (kind='denied_limit' OR (kind='update' AND value->>'denied'='true')) AND (value->>'expires')::bigint<=$1`,[now]);
+    await this.pool.query(`DELETE FROM mcp_records WHERE (kind='denied_limit' OR kind='oauth_limit' OR (kind='update' AND value->>'denied'='true')) AND (value->>'expires')::bigint<=$1`,[now]);
   }
   async reserveDeniedReply(botId,updateId,senderId,chatId,now=Date.now()) {
     // Expiry cleanup runs on initialization and denied traffic, including other

@@ -2,11 +2,10 @@
 
 ## Reporting
 
-A dedicated private vulnerability-reporting channel has not yet been designated.
-No email address or enabled advisory endpoint is claimed here. If GitHub private vulnerability reporting is enabled on this repository, use that
-private advisory flow. Otherwise, open an issue only to request a private reporting
-route, without credentials, vulnerability details or exploit information. No response-time or supported-version
-service commitment is currently made.
+Report vulnerabilities privately through this GitHub repository: Security tab →
+Report a vulnerability. Do not use a personal email address, and do not open a
+public issue with credentials, vulnerability details or exploit information. No
+response-time or supported-version service commitment is currently made.
 
 Report the affected version, expected/observed behavior and a synthetic minimal
 reproduction. Redact credentials, personal identifiers and message contents.
@@ -54,9 +53,9 @@ Use unique high-entropy keys and separate databases for each deployment. Keep
 credentials out of model-visible chat and logs. Secure the hosting account,
 database, backups and independent recovery vault. Set appropriate platform rate
 limits and monitor capacity and delivery failures without retaining message bodies
-in diagnostics. Review retention for OAuth records, old receipts and legacy data. Public OAuth
-registration and consent endpoints currently lack application-wide throttling and
-general TTL cleanup; restrict abuse at the hosting layer and address storage growth.
+in diagnostics. Review retention for OAuth records, old receipts and legacy data. Public OAuth registration still lacks application-wide throttling and general TTL
+cleanup; the consent page is bounded by a storage-backed limiter. Restrict remaining
+abuse at the hosting layer and address storage growth.
 Version 0.6.15 uses fixed descriptions for Grok Bot API errors rather than
 reflecting upstream response bodies. Maintain this boundary in future adapters.
 
