@@ -16,7 +16,7 @@ export function createEntrypoint(createService=()=>{
    req.body=JSON.parse(await readBody(req));
    if(!prepareProtocol(req,res,req.body))return;
    const contextualList=req.body.method==='tools/list'&&['authorization','x-mcp-agent-id','x-mcp-bot-type'].some(h=>req.headers[h]!==undefined);
-   if(!contextualList&&req.body.jsonrpc==='2.0'&&['server/discover','initialize','ping','tools/list','events/list'].includes(req.body.method)){
+   if(!contextualList&&req.body.jsonrpc==='2.0'&&['server/discover','tools/list','events/list'].includes(req.body.method)){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
     return res.end(JSON.stringify({jsonrpc:'2.0',id:req.body.id??null,result:await new App({}).rpc(null,req.body.method)}));
    }

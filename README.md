@@ -3,7 +3,7 @@
 [GitHub repository](https://github.com/realTaki/BotlineMCP)
 
 A self-hosted, single-owner relay between agents and Telegram private messages.
-This documentation targets source version **0.6.17**. Configure `MCP_API_KEY`,
+This documentation targets source version **0.6.18**. Configure `MCP_API_KEY`,
 use `X-MCP-*` client headers, and identify forwarded messages by the `[MCP]`
 routing line. Newly issued agent tokens use the `mcp_at_` prefix.
 
@@ -106,15 +106,16 @@ adaptation, not a claim that an arbitrary `PORT` or `PUBLIC_URL` variable works.
 
 ## Client compatibility and onboarding
 
-The HTTP endpoint supports modern `2026-07-28` request metadata for its JSON
-request/response tools and retains legacy `2025-06-18` initialization. Modern
-clients send the protocol version and client capabilities in request `_meta`,
-with matching `MCP-Protocol-Version`, `Mcp-Method`, and (for tool calls)
-`Mcp-Name` headers. Responses include `resultType` and server identity metadata.
-`server/discover` advertises both supported revisions; `initialize` remains the
-legacy handshake. Existing webhook event operations are a service-specific
-extension, not a generic streaming-subscription implementation. This does not
-certify every client or optional protocol feature.
+The HTTP endpoint implements only MCP `2026-07-28` for its JSON request/response
+tools. Every request supplies the protocol version and client capabilities in
+`params._meta`, with matching `MCP-Protocol-Version`, `Mcp-Method`, and (for tool
+calls) `Mcp-Name` headers. Responses include `resultType` and server identity
+metadata. Use `server/discover` for instructions and capabilities; no
+initialization handshake is supported. Missing metadata and unsupported versions
+are rejected. OAuth and instance-key/per-agent-token authentication remain
+available under this same protocol. Existing webhook event operations are a
+service-specific extension, not a generic streaming-subscription implementation.
+This does not certify every client or optional protocol feature.
 
 Protocol diagnostics record only a fixed method category, recognized protocol
 version categories and HTTP status. They do not log credentials, identities,

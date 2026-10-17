@@ -1,5 +1,15 @@
 # Logical agents and private DMs
 
+## Transport
+
+All clients use MCP `2026-07-28` over `POST /mcp`. Send the protocol version and
+client capabilities in `params._meta`, mirrored by `MCP-Protocol-Version` and
+`Mcp-Method` headers; tool calls also send `Mcp-Name` matching `params.name`.
+Use `server/discover` for capabilities and onboarding instructions. There is no
+initialization handshake or older-protocol fallback. These requirements apply
+to both OAuth and direct API-key clients; authentication does not select a
+protocol revision. See the README for the supported transport scope.
+
 This is a single-owner relay. All API-key and OAuth clients retain the existing
 instance-wide authority. An agent handle is a stable **routing identity**, not a
 permission tier or separate security account. Never share the instance with

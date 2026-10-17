@@ -50,7 +50,7 @@ test('instance authentication requires a Bearer credential and rejects legacy ag
  const f=fixture();assert.equal(f.app.instanceKeyHash,hash(instanceKey));
  const rpc=JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'agent_whoami',arguments:{}}});
  const accepted=await httpRequest(f.app,'/mcp','POST',rpc,{authorization:'Bearer '+instanceKey});
- assert.equal(accepted.statusCode,200);assert.deepEqual(JSON.parse(accepted.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.17',tool_profile:'bootstrap',available_tool_names:published});
+ assert.equal(accepted.statusCode,200);assert.deepEqual(JSON.parse(accepted.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.18',tool_profile:'bootstrap',available_tool_names:published});
  for(const authorization of [undefined,instanceKey,'Basic '+instanceKey,'Bearer ','Bearer wrong',[instanceKey]])assert.equal((await httpRequest(f.app,'/mcp','POST',rpc,{authorization})).statusCode,401);
  const retired=new App({store:f.store,key,origin:f.app.origin,instanceKey,agents:[{id:'old-agent',tokenHash:hash('old-key')}]});
  assert.equal((await httpRequest(retired,'/mcp','POST',rpc,{authorization:'Bearer old-key'})).statusCode,401);
@@ -67,12 +67,16 @@ test('transient failure retained; retry stable event ID; unsubscribe cancels pen
 test('410 is terminal, no automatic resend',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);await f.app.subscribe(INSTANCE_ID,subscription);f.setStatus(410);const b=await f.store.get('bot','123');assert(await f.app.receive('123',b.hookSecret,message()));assert.equal((await f.store.list('delivery'))[0].state,'failed');const n=f.sent.length;await f.app.dispatch(INSTANCE_ID);assert.equal(f.sent.length,n);});
 test('send request IDs prevent duplicates and conflicting payload reuse',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);const a={bot_id:'123',chat_id:'42',text:'test',request_id:'test-request-1'};await f.app.invoke(INSTANCE_ID,'telegram_send_message',a);await f.app.invoke(INSTANCE_ID,'telegram_send_message',a);assert.equal(f.calls.filter(c=>c.method==='sendMessage').length,1);await assert.rejects(f.app.invoke(INSTANCE_ID,'telegram_send_message',{...a,text:'changed'}));});
 test('uncertain sends do not auto retry',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);f.failSend();const a={bot_id:'123',chat_id:'42',text:'test',request_id:'test-request-2'};await assert.rejects(f.app.invoke(INSTANCE_ID,'telegram_send_message',a));assert.equal((await f.app.invoke(INSTANCE_ID,'telegram_send_message',a)).status,'uncertain');assert.equal(f.calls.filter(c=>c.method==='sendMessage').length,1);});
-test('MCP HTTP permits public discovery',async()=>{const f=fixture();async function request(headers={}){let output;const req=Readable.from([JSON.stringify({jsonrpc:'2.0',id:1,method:'server/discover'})]);Object.assign(req,{headers,url:'/mcp',method:'POST'});const res={setHeader(){},end(b){output=JSON.parse(b);}};await handler(f.app)(req,res);return{status:res.statusCode,output};}assert.equal((await request()).status,200);const r=await request({authorization:'Bearer '+instanceKey});assert.equal(r.output.result.supportedVersions[0],'2026-07-28');});
-test('server/discover advertises both eras while initialize retains its legacy version',async()=>{
- const app=new App({});const discover=await app.rpc(null,'server/discover'),init=await app.rpc(null,'initialize');
- assert.equal(init.protocolVersion,'2025-06-18');assert.deepEqual(discover.supportedVersions,['2026-07-28','2025-06-18']);
+test('MCP HTTP permits public discovery',async()=>{const f=fixture();const r=await httpRequest(f.app,'/mcp','POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'server/discover'}));assert.equal(r.statusCode,200);assert.deepEqual(JSON.parse(r.body).result.supportedVersions,['2026-07-28']);});
+test('server discovery advertises only the supported stateless revision',async()=>{
+ const app=new App({});assert.deepEqual((await app.rpc(null,'server/discover')).supportedVersions,['2026-07-28']);
+ for(const method of ['initialize','ping'])await assert.rejects(app.rpc(null,method),/Method not found/);
 });
-async function httpRequest(app,path,method='GET',body='',headers={}){const req=Readable.from(body?[body]:[]);Object.assign(req,{url:path,method,headers});const response={headers:{},setHeader(k,v){this.headers[k]=v;},end(b){this.body=b??'';}};await handler(app)(req,response);return response;}
+function modernWire(body,headers){
+ const rpc=JSON.parse(body);rpc.params={...rpc.params,_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{},...rpc.params?._meta}};
+ return {body:JSON.stringify(rpc),headers:{'mcp-protocol-version':'2026-07-28','mcp-method':rpc.method,...(rpc.params.name?{'mcp-name':rpc.params.name}:{}),...headers}};
+}
+async function httpRequest(app,path,method='GET',body='',headers={}){if(path==='/mcp'&&method==='POST'&&headers['mcp-protocol-version']===undefined)({body,headers}=modernWire(body,headers));const req=Readable.from(body?[body]:[]);Object.assign(req,{url:path,method,headers});const response={headers:{},setHeader(k,v){this.headers[k]=v;},end(b){this.body=b??'';}};await handler(app)(req,response);return response;}
 test('OAuth registration rejects arbitrary redirect hosts',async()=>{const f=fixture();const r=await httpRequest(f.app,'/oauth/register','POST',JSON.stringify({redirect_uris:['https://attacker.example/callback']}));assert.equal(r.statusCode,400);});
 test('OAuth consent GET and POST share a storage-backed limiter',async()=>{
  const f=fixture(),ip={'x-forwarded-for':'203.0.113.10'};
@@ -119,7 +123,7 @@ test('retired binding form and old links cannot bind a bot',async()=>{
  assert.equal(f.calls.length,0);assert.equal((await f.store.list('bot')).length,0);
 });
 test('completed webhook receipt and delivery discard message text',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);await f.app.subscribe(INSTANCE_ID,subscription);const b=await f.store.get('bot','123');await f.app.receive('123',b.hookSecret,message());const receipt=await f.store.get('update','123:1');assert(receipt.completed);assert.equal(receipt.event.data,undefined);const [d]=await f.store.list('delivery');assert.equal(d.event.data,undefined);assert(await f.app.receive('123',b.hookSecret,message()));});
-test('Vercel pre-parsed JSON request body is supported',async()=>{const f=fixture();const req=Readable.from([]);Object.assign(req,{url:'/mcp',method:'POST',headers:{authorization:'Bearer '+instanceKey},body:{jsonrpc:'2.0',id:1,method:'tools/list'}});let result;const res={setHeader(){},end(v){result=JSON.parse(v);}};await handler(f.app)(req,res);assert.deepEqual(result.result.tools.map(t=>t.name),published);});
+test('Vercel pre-parsed JSON request body is supported',async()=>{const f=fixture();const req=Readable.from([]);Object.assign(req,{url:'/mcp',method:'POST',headers:{authorization:'Bearer '+instanceKey,'mcp-protocol-version':'2026-07-28','mcp-method':'tools/list'},body:{jsonrpc:'2.0',id:1,method:'tools/list',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{}}}}});let result;const res={setHeader(){},end(v){result=JSON.parse(v);}};await handler(f.app)(req,res);assert.deepEqual(result.result.tools.map(t=>t.name),published);});
 test('Vercel pre-parsed form bodies retain form semantics',async()=>{const {readBody}=await import('../src/app.js');const raw=await readBody({body:{ticket:'a',token:'b:c'},headers:{'content-type':'application/x-www-form-urlencoded'}});assert.equal(new URLSearchParams(raw).get('token'),'b:c');});
 
 async function mcp(app,credential,name,args={}){return httpRequest(app,'/mcp','POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}}),credential?{authorization:'Bearer '+credential}:{});}
@@ -134,7 +138,7 @@ test('instance OAuth session shares authority; key rotation revokes access and r
  assert.equal(approved.statusCode,303);
  const code=new URL(approved.headers.Location).searchParams.get('code');
  const tokens=JSON.parse((await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:p.client_id,redirect_uri:p.redirect_uri,resource:p.resource,code,code_verifier:verifier,grant_type:'authorization_code'}).toString())).body);
- assert.deepEqual(JSON.parse((await mcp(f.app,tokens.access_token,'agent_whoami')).body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.17',tool_profile:'bootstrap',available_tool_names:published});
+ assert.deepEqual(JSON.parse((await mcp(f.app,tokens.access_token,'agent_whoami')).body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.18',tool_profile:'bootstrap',available_tool_names:published});
  f.app.instanceKeyHash=hash('replacement-instance-key');
  assert.equal((await mcp(f.app,tokens.access_token,'bot_list')).statusCode,401);
  assert.equal((await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:p.client_id,resource:p.resource,grant_type:'refresh_token',refresh_token:tokens.refresh_token}).toString())).statusCode,401);
@@ -168,14 +172,14 @@ test('bind returns identity only; unregistered private DMs are denied until the 
  await f.app.receive('123',stored.hookSecret,message(2));assert.equal(f.sent.filter(s=>s.value.name).length,1);
 });
 test('discovery documents agent-first recovery, minimal friction and retired forms',async()=>{
- const app=new App({});const discover=await app.rpc(null,'server/discover'),init=await app.rpc(null,'initialize');
+ const app=new App({});const discover=await app.rpc(null,'server/discover'),init=discover;
  assert.match(discover.serverInfo.description,/agent-first/);assert.match(init.instructions,/same instance key/);
  const listed=await app.rpc(null,'tools/list');assert.deepEqual(listed.tools.map(t=>t.name),published);assert(!listed.tools.some(t=>t.name==='bot_begin_binding'));assert(!listed.tools.some(t=>t.name==='telegram_whitelist_update'));assert.match(init.instructions,/Minimize user friction/);
 });
 test('single instance key shares authority; retired invitations and old agent credentials rejected',async()=>{
  const f=fixture();
  const who=JSON.parse((await mcp(f.app,instanceKey,'agent_whoami')).body).result.structuredContent;
- assert.deepEqual(who,{registered:false,agent_id:null,server_version:'0.6.17',tool_profile:'bootstrap',available_tool_names:published});
+ assert.deepEqual(who,{registered:false,agent_id:null,server_version:'0.6.18',tool_profile:'bootstrap',available_tool_names:published});
  await f.app.bind(INSTANCE_ID,bind);
  assert.equal((await f.app.invoke(INSTANCE_ID,'bot_list')).bots.length,1);
  assert.equal((await mcp(f.app,'wrong-key','bot_list')).statusCode,401);
@@ -191,7 +195,7 @@ test('legacy instance OAuth grants remain valid while retired agent grants are r
  const legacyAccess='legacy-access',legacyRefresh='legacy-refresh',expires=Date.now()+60000;
  await f.store.put('access',hash(legacyAccess),{owner:INSTANCE_ID,resource,expires});
  await f.store.put('refresh',hash(legacyRefresh),{owner:INSTANCE_ID,client_id:clientId,resource,expires});
- const who=await mcp(f.app,legacyAccess,'agent_whoami');assert.equal(who.statusCode,200);assert.deepEqual(JSON.parse(who.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.17',tool_profile:'bootstrap',available_tool_names:published});
+ const who=await mcp(f.app,legacyAccess,'agent_whoami');assert.equal(who.statusCode,200);assert.deepEqual(JSON.parse(who.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.18',tool_profile:'bootstrap',available_tool_names:published});
  const refreshed=await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:clientId,resource,refresh_token:legacyRefresh,grant_type:'refresh_token'}).toString());
  assert.equal(refreshed.statusCode,200);const tokens=JSON.parse(refreshed.body);assert(tokens.access_token);
  assert.equal((await f.store.get('access',hash(tokens.access_token))).authVersion,hash(instanceKey));
@@ -206,8 +210,8 @@ test('all retired invitation and per-agent tools keep explicit 410 tombstones',a
  assert.equal(f.calls.length,0);
 });
 
-test('initialize separates direct agent access and authenticated dot Settings fallback', async()=>{
- const {instructions}=await new App({}).rpc(null,'initialize');
+test('discovery separates direct agent access and authenticated dot Settings fallback', async()=>{
+ const {instructions}=await new App({}).rpc(null,'server/discover');
  assert.match(instructions,/ChatGPT dot onboarding/);
  assert.match(instructions,/Only after successful server authentication/);
  assert.match(instructions,/Direct instance-key authentication does not issue/);
@@ -403,7 +407,7 @@ test('bootstrap registration makes the next authenticated listing reveal the app
 });
 
 test('existing onboarding guide consistently distinguishes dot inbox from direct Grok Bot delivery',async()=>{
- const {instructions,capabilities}=await new App({}).rpc(null,'initialize');
+ const {instructions,capabilities}=await new App({}).rpc(null,'server/discover');
  assert.match(instructions,/stored handle exactly dot and no grokbot_agent_name destination/);
  assert.match(instructions,/If this connection already has another handle or a Grok Bot destination/);
  assert.match(instructions,/inbox.ready wake hints: call messages_inbox, drain pages, deduplicate by message_id, and call messages_ack only after processing/);
@@ -425,7 +429,7 @@ test('whoami diagnostics use the same tool selection as authenticated discovery 
  const f=await profileFixture();
  for(const [headers,profile] of [[{authorization:'Bearer oauth-dot'},'dot'],[{authorization:'Bearer oauth-bot'},'bot'],[{authorization:'Bearer oauth-fresh'},'bootstrap'],[{authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'},'bot']]){
   const before=structuredClone([...f.store.data]);const result=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{}},headers)).body).result.structuredContent;
-  assert.equal(result.server_version,'0.6.17');assert.equal(result.tool_profile,profile);
+  assert.equal(result.server_version,'0.6.18');assert.equal(result.tool_profile,profile);
   assert.deepEqual(result.available_tool_names,profileNames(await profileRpc(f.app,'tools/list',{},headers)));
   assert.deepEqual([...f.store.data],before);assert(!JSON.stringify(result).includes(instanceKey));assert(!JSON.stringify(result).includes('oauth-dot'));
   assert.equal(result.agent_token,undefined);assert.equal(result.tokenHash,undefined);
@@ -571,7 +575,7 @@ test('production entry preserves anonymous catalog and authenticated exact profi
  let starts=0;const entry=createEntrypoint(()=>{starts++;return {serve:handler(f.app),initialized:Promise.resolve()};});
  const all=['agent_register','agent_token_rotate','cursor_key_set','cursor_key_clear','agents_list','human_register','messages_inbox','messages_ack','messages_send','telegram_bot_get','agent_whoami','telegram_bot_bind','telegram_bot_unbind'];
  const dot=all.filter(n=>!['cursor_key_set','cursor_key_clear'].includes(n)),bot=all.filter(n=>!['messages_inbox','messages_ack'].includes(n));
- async function list(headers={}){const req=Readable.from([JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})]);Object.assign(req,{url:'/mcp',method:'POST',headers});const res={setHeader(){},end(body){this.body=body;}};await entry(req,res);return res;}
+ async function list(headers={}){const wire=modernWire(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'}),headers);const req=Readable.from([wire.body]);Object.assign(req,{url:'/mcp',method:'POST',headers:wire.headers});const res={setHeader(){},end(body){this.body=body;}};await entry(req,res);return res;}
  assert.deepEqual(profileNames(await list()),all);assert.equal(starts,0);
  assert.deepEqual(profileNames(await list({authorization:'Bearer oauth-fresh'})),all);
  assert.deepEqual(profileNames(await list({authorization:'Bearer oauth-dot'})),dot);
@@ -634,7 +638,7 @@ test('modern production discovery and fresh OAuth tools use stateless envelopes 
  }
  assert.equal((await request('tools/list',{}, {origin:f.app.origin})).statusCode,200);
  for(const method of ['initialize','ping']){const rejected=await request(method);assert.equal(rejected.statusCode,404);assert.equal(rejected.value.error.code,-32601);}
- const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28','2025-06-18']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.17');
+ const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.18');
  const auth={authorization:'Bearer oauth-fresh'};
  const fresh=await request('tools/list',{},auth);assert.equal(fresh.value.result.tools.length,13);assert.equal(fresh.value.result.resultType,'complete');
  const who=await request('tools/call',{name:'agent_whoami',arguments:{}},auth);assert.equal(who.value.result.structuredContent.registered,false);assert.equal(who.value.result.resultType,'complete');

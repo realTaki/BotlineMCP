@@ -1,8 +1,7 @@
-// Modern per-request metadata and legacy initialize share one stateless endpoint.
-export const MODERN_VERSION='2026-07-28';
-export const LEGACY_VERSION='2025-06-18';
-export const SUPPORTED_VERSIONS=[MODERN_VERSION,LEGACY_VERSION];
-export const SERVER_INFO={name:'BotlineMCP',version:'0.6.17'};
+// One stateless protocol revision on every HTTP request.
+export const PROTOCOL_VERSION='2026-07-28';
+export const SUPPORTED_VERSIONS=[PROTOCOL_VERSION];
+export const SERVER_INFO={name:'BotlineMCP',version:'0.6.18'};
 const prefix='io.modelcontextprotocol/';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const failure=(code,message,data)=>({code,message,...(data?{data}:{})});
@@ -17,17 +16,16 @@ function decoded(value){
 }
 export function protocolRequest(req,rpc){
  const meta=rpc?.params?._meta,version=meta?.[prefix+'protocolVersion'],header=req.headers['mcp-protocol-version'];
- const modern=version!==undefined||header!==undefined&&header!==LEGACY_VERSION;
- if(!modern)return {modern:false};
- if(!object(rpc)||rpc.jsonrpc!=='2.0'||typeof rpc.method!=='string'||!(typeof rpc.id==='string'||Number.isInteger(rpc.id)))return {modern:true,error:failure(-32600,'Invalid JSON-RPC request')};
- if(typeof version!=='string'||!object(meta?.[prefix+'clientCapabilities']))return {modern:true,error:failure(-32602,'Required per-request protocol metadata is missing or malformed')};
- if(header!==version||req.headers['mcp-method']!==rpc.method)return {modern:true,error:failure(-32020,'Protocol routing headers do not match the request')};
- if(!SUPPORTED_VERSIONS.includes(version))return {modern:true,error:failure(-32022,'Unsupported protocol version',{supported:SUPPORTED_VERSIONS,requested:version})};
- if(version!==MODERN_VERSION)return {modern:true,error:failure(-32602,'Per-request metadata requires a modern protocol version')};
- if(['initialize','ping'].includes(rpc.method))return {modern:true,status:404,error:failure(-32601,'Method is only available through legacy initialization')};
- const name=rpc.method==='resources/read'?rpc.params?.uri:['tools/call','prompts/get'].includes(rpc.method)?rpc.params?.name:undefined;
- if(name!==undefined&&decoded(req.headers['mcp-name'])!==name)return {modern:true,error:failure(-32020,'Named routing header does not match the request')};
- return {modern:true};
+ if(!object(rpc)||rpc.jsonrpc!=='2.0'||typeof rpc.method!=='string'||!(typeof rpc.id==='string'||Number.isInteger(rpc.id)))return {error:failure(-32600,'Invalid JSON-RPC request')};
+ if(typeof version!=='string'||!object(meta?.[prefix+'clientCapabilities']))return {error:failure(-32602,'Required per-request protocol metadata is missing or malformed')};
+ if(header!==version||req.headers['mcp-method']!==rpc.method)return {error:failure(-32020,'Protocol routing headers do not match the request')};
+ if(!SUPPORTED_VERSIONS.includes(version))return {error:failure(-32022,'Unsupported protocol version',{supported:SUPPORTED_VERSIONS,requested:version})};
+ if(['initialize','notifications/initialized','ping'].includes(rpc.method))return {status:404,error:failure(-32601,'Method not supported by this protocol revision')};
+ const named=['tools/call','resources/read','prompts/get'].includes(rpc.method);
+ const name=rpc.method==='resources/read'?rpc.params?.uri:rpc.params?.name;
+ if(named&&typeof name!=='string')return {error:failure(-32602,'Named request requires a name or URI')};
+ if(named&&decoded(req.headers['mcp-name'])!==name)return {error:failure(-32020,'Named routing header does not match the request')};
+ return {};
 }
 export function modernResult(result){return {...result,resultType:result.resultType??'complete',_meta:{...result._meta,[prefix+'serverInfo']:SERVER_INFO}};}
 // Shared by the serverless entry and the development/direct HTTP handler.
@@ -35,9 +33,9 @@ export function prepareProtocol(req,res,rpc){
  req.protocolMessage=rpc;
  if(req.protocolPrepared)return true;
  const protocol=protocolRequest(req,rpc);
- if(protocol.error){res.statusCode=protocol.status??400;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify({jsonrpc:'2.0',id:rpc.id,error:protocol.error}));return false;}
+ if(protocol.error){res.statusCode=protocol.status??400;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify({jsonrpc:'2.0',...(typeof rpc?.id==='string'||Number.isInteger(rpc?.id)?{id:rpc.id}:{}),error:protocol.error}));return false;}
  req.protocolPrepared=true;
- if(protocol.modern){
+ {
   const end=res.end.bind(res);
   res.end=body=>{
    if(typeof body==='string')try{
