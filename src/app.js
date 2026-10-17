@@ -1,4 +1,4 @@
-import {LEGACY_VERSION,SUPPORTED_VERSIONS,SERVER_INFO,prepareProtocol} from './protocol.js';
+import {LEGACY_VERSION,SUPPORTED_VERSIONS,SERVER_INFO,prepareProtocol,instrumentProtocol} from './protocol.js';
 import {INSTANCE_ID} from './config.js';
 import {authenticatePrincipal,oauth} from './oauth.js';
 import {registerAgent,listAgents,getAgent,resolveCallerAgent,rotateAgentToken,callerTokenProperty} from './agents.js';
@@ -94,7 +94,7 @@ export class App {
     }
     if(['invite_create','invite_list','invite_revoke','agent_list','agent_disable'].includes(name))requireThat(false,'Invitations and per-agent accounts are retired; use the instance key.',410);
     if(['telegram_whitelist_update','bot_access_update','bot_access_get'].includes(name))requireThat(false,'Per-bot allowlists are retired; use human_register.',410);
-    if(name==='agent_whoami'){const agent=principal.agentId?await getAgent(this,owner,principal.agentId):null;const available_tool_names=(await this.availableTools(principal,botType)).map(t=>t.name),tool_profile=!principal.agentId?'bootstrap':available_tool_names.includes('messages_inbox')?'dot':'bot';return {...(agent?{registered:true,...agent}:{registered:false,agent_id:null}),server_version:'0.6.16',tool_profile,available_tool_names};}
+    if(name==='agent_whoami'){const agent=principal.agentId?await getAgent(this,owner,principal.agentId):null;const available_tool_names=(await this.availableTools(principal,botType)).map(t=>t.name),tool_profile=!principal.agentId?'bootstrap':available_tool_names.includes('messages_inbox')?'dot':'bot';return {...(agent?{registered:true,...agent}:{registered:false,agent_id:null}),server_version:'0.6.17',tool_profile,available_tool_names};}
     if(name==='agent_register')return registerAgent(this,principal,args);
     if(name==='agent_token_rotate')return rotateAgentToken(this,principal);
     if(name==='cursor_key_set')return setCursorKey(this,principal,args);
@@ -181,7 +181,7 @@ export class App {
   }
   async rpcCall(owner,method,p={},principal={owner,agentId:null},botType=null) {
     if(method==='server/discover')return {resultType:'complete',supportedVersions:SUPPORTED_VERSIONS,capabilities:{tools:{},events:{}},_meta:{'io.modelcontextprotocol/serverInfo':SERVER_INFO},instructions:agentInstructions,serverInfo:{...SERVER_INFO,description:serviceDescription}};
-    if(method==='initialize')return {instructions:agentInstructions,protocolVersion:LEGACY_VERSION,capabilities:{tools:{}},serverInfo:{name:'BotlineMCP',version:'0.6.16',description:serviceDescription}};
+    if(method==='initialize')return {instructions:agentInstructions,protocolVersion:LEGACY_VERSION,capabilities:{tools:{}},serverInfo:{name:'BotlineMCP',version:'0.6.17',description:serviceDescription}};
     if(method==='ping')return {};
     if(method==='tools/list')return {tools:await this.availableTools(principal,botType)};
     if(method==='events/list')return {events:[eventDefinition,...dmEvents]};
@@ -281,7 +281,7 @@ export function handler(app) {
     if(path==='/settings'||path.startsWith('/settings/'))return await settings(app,req,path,readBody,send,res);
     if(path.startsWith('/oauth/')||path.startsWith('/.well-known/')) return await oauth(app,req,path,readBody,send,res);
     if(path==='/agents/redeem')return send(410,{error:'Invitations are retired. Connect with the instance key.'});
-    if(path==='/health')return send(200,{service:'BotlineMCP',status:'configured',version:'0.6.16'});
+    if(path==='/health')return send(200,{service:'BotlineMCP',status:'configured',version:'0.6.17'});
     if(path==='/bind')return send(410,{error:'Link-only binding has been retired. Use authenticated MCP bot_bind.'});
     if(path.startsWith('/telegram/')&&req.method==='POST') {
       const update=JSON.parse(await readBody(req,262144)),botId=path.slice(10),secret=req.headers['x-telegram-bot-api-secret-token'];let done;
@@ -291,6 +291,7 @@ export function handler(app) {
       }
       return send(done?200:503,{ok:done});
     }
+    if(path==='/mcp')instrumentProtocol(req,res);
     requireThat(path==='/mcp','Not found',404);requireThat(req.method==='POST','Only POST supported',405);
     if(req.headers.origin!==undefined)requireThat(req.headers.origin===app.origin,'Origin mismatch',403);
     const rpc=JSON.parse(await readBody(req));

@@ -3,7 +3,7 @@
 [GitHub repository](https://github.com/realTaki/BotlineMCP)
 
 A self-hosted, single-owner relay between agents and Telegram private messages.
-This documentation targets source version **0.6.16**. Configure `MCP_API_KEY`,
+This documentation targets source version **0.6.17**. Configure `MCP_API_KEY`,
 use `X-MCP-*` client headers, and identify forwarded messages by the `[MCP]`
 routing line. Newly issued agent tokens use the `mcp_at_` prefix.
 
@@ -115,6 +115,10 @@ with matching `MCP-Protocol-Version`, `Mcp-Method`, and (for tool calls)
 legacy handshake. Existing webhook event operations are a service-specific
 extension, not a generic streaming-subscription implementation. This does not
 certify every client or optional protocol feature.
+
+Protocol diagnostics record only a fixed method category, recognized protocol
+version categories and HTTP status. They do not log credentials, identities,
+URLs, tool arguments or response content.
 
 
 ### ChatGPT dot

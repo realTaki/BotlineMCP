@@ -2,7 +2,7 @@
 export const MODERN_VERSION='2026-07-28';
 export const LEGACY_VERSION='2025-06-18';
 export const SUPPORTED_VERSIONS=[MODERN_VERSION,LEGACY_VERSION];
-export const SERVER_INFO={name:'BotlineMCP',version:'0.6.16'};
+export const SERVER_INFO={name:'BotlineMCP',version:'0.6.17'};
 const prefix='io.modelcontextprotocol/';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const failure=(code,message,data)=>({code,message,...(data?{data}:{})});
@@ -32,6 +32,7 @@ export function protocolRequest(req,rpc){
 export function modernResult(result){return {...result,resultType:result.resultType??'complete',_meta:{...result._meta,[prefix+'serverInfo']:SERVER_INFO}};}
 // Shared by the serverless entry and the development/direct HTTP handler.
 export function prepareProtocol(req,res,rpc){
+ req.protocolMessage=rpc;
  if(req.protocolPrepared)return true;
  const protocol=protocolRequest(req,rpc);
  if(protocol.error){res.statusCode=protocol.status??400;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify({jsonrpc:'2.0',id:rpc.id,error:protocol.error}));return false;}
@@ -50,4 +51,20 @@ export function prepareProtocol(req,res,rpc){
   };
  }
  return true;
+}
+
+const diagnosticMethods=new Set(['server/discover','initialize','notifications/initialized','ping','tools/list','tools/call','events/list','events/subscribe','events/unsubscribe']);
+const diagnosticVersions=new Set(['2024-11-05','2025-03-26','2025-06-18','2025-11-25','2026-07-28']);
+const diagnosticVersion=value=>value===undefined?'missing':diagnosticVersions.has(value)?value:'other';
+export function protocolDiagnostic(req,rpc,status){
+ return {event:'mcp.protocol',method:diagnosticMethods.has(rpc?.method)?rpc.method:'other',header_version:diagnosticVersion(req.headers['mcp-protocol-version']),body_version:diagnosticVersion(rpc?.method==='initialize'?rpc?.params?.protocolVersion:rpc?.params?._meta?.[prefix+'protocolVersion']),status:Number.isInteger(status)&&status>=100&&status<=599?status:500};
+}
+export function instrumentProtocol(req,res,emit=value=>console.info(JSON.stringify(value))){
+ if(req.protocolInstrumented)return;
+ req.protocolInstrumented=true;
+ const end=res.end.bind(res);let emitted=false;
+ res.end=body=>{
+  if(!emitted){emitted=true;try{emit(protocolDiagnostic(req,req.protocolMessage,res.statusCode??200));}catch{}}
+  return end(body);
+ };
 }

@@ -1,4 +1,4 @@
-import {prepareProtocol} from '../src/protocol.js';
+import {prepareProtocol,instrumentProtocol} from '../src/protocol.js';
 import {configuration} from '../src/config.js';
 import { App,handler,readBody } from '../src/app.js';
 import { Store } from '../src/store.js';
@@ -10,6 +10,7 @@ export function createEntrypoint(createService=()=>{
  return async function(req,res){
  // Only identity-free discovery may bypass the configured handler.
  if(req.method==='POST'&&req.url.split('?')[0]==='/mcp'){
+  instrumentProtocol(req,res);
   if(req.headers.origin!==undefined&&req.headers.origin!==publicOrigin()){res.statusCode=403;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify({error:'Origin mismatch'}));}
   try{
    req.body=JSON.parse(await readBody(req));
