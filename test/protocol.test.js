@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {instrumentProtocol,prepareProtocol,protocolDiagnostic,protocolRequest} from '../src/protocol.js';
+import {acceptsEventStream,instrumentProtocol,prepareProtocol,protocolDiagnostic,protocolRequest,usesModernEnvelope,writeGetSse} from '../src/protocol.js';
 test('protocol diagnostics emit only bounded enums and numeric status, never request or response content',()=>{
  const sensitive='synthetic-secret-person@example.test';
  const req={headers:{authorization:sensitive,'mcp-protocol-version':sensitive,origin:sensitive},url:'/'+sensitive};
@@ -31,6 +31,16 @@ test('one supported revision rejects missing metadata, old versions and removed 
  for(const version of ['2025-06-18','2025-11-25']){const r=protocolRequest({headers:{...headers,'mcp-protocol-version':version}},{jsonrpc:'2.0',id:1,method:'tools/list',params:{_meta:{...meta,'io.modelcontextprotocol/protocolVersion':version}}});assert.equal(r.error.code,-32022);assert.deepEqual(r.error.data.supported,['2026-07-28']);}
  for(const method of ['initialize','notifications/initialized','ping']){const r=protocolRequest({headers:{...headers,'mcp-method':method}},{jsonrpc:'2.0',id:1,method,params:{_meta:meta}});assert.equal(r.status,404);assert.equal(r.error.code,-32601);}
  assert.equal(protocolRequest({headers:{...headers,'mcp-method':'tools/call'}},{jsonrpc:'2.0',id:1,method:'tools/call',params:{_meta:meta}}).error.code,-32602);
+});
+
+test('Streamable HTTP GET and Accept detection do not use the 2026 envelope',()=>{
+ assert.equal(acceptsEventStream('application/json, text/event-stream'),true);
+ assert.equal(acceptsEventStream('application/json'),false);
+ assert.equal(usesModernEnvelope({headers:{'mcp-protocol-version':'2026-07-28'}},{method:'tools/list',params:{_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28'}}}),true);
+ assert.equal(usesModernEnvelope({headers:{}},{jsonrpc:'2.0',id:0,method:'initialize',params:{protocolVersion:'2025-11-25'}}),false);
+ assert.equal(usesModernEnvelope({headers:{'mcp-protocol-version':'2025-06-18'}},{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'agent_whoami'}}),false);
+ const res={headers:{},setHeader(k,v){this.headers[k]=v;},end(body){this.body=body;}};
+ writeGetSse(res);assert.equal(res.statusCode,200);assert.equal(res.headers['Content-Type'],'text/event-stream');assert.equal(res.body,': connected\n\nretry: 15000\n\n');
 });
 
 test('null JSON request receives a structured invalid request error',()=>{

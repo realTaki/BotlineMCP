@@ -1,10 +1,52 @@
 // One stateless protocol revision on every HTTP request.
 export const PROTOCOL_VERSION='2026-07-28';
 export const SUPPORTED_VERSIONS=[PROTOCOL_VERSION];
+export const STREAMABLE_HTTP_VERSION='2025-06-18';
+export const STREAMABLE_HTTP_VERSIONS=['2025-03-26','2025-06-18','2025-11-25'];
 export const SERVER_INFO={name:'BotlineMCP',version:'0.6.20'};
 const prefix='io.modelcontextprotocol/';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const failure=(code,message,data)=>({code,message,...(data?{data}:{})});
+export function acceptsEventStream(accept){
+ return typeof accept==='string'&&accept.split(',').some(part=>part.trim().toLowerCase().startsWith('text/event-stream'));
+}
+export function usesModernEnvelope(req,rpc){
+ const header=req.headers['mcp-protocol-version'];
+ const meta=rpc?.params?._meta?.[prefix+'protocolVersion'];
+ if(header===PROTOCOL_VERSION||meta===PROTOCOL_VERSION)return true;
+ if(rpc?.method==='initialize'||rpc?.method==='notifications/initialized')return false;
+ if(STREAMABLE_HTTP_VERSIONS.includes(header)||STREAMABLE_HTTP_VERSIONS.includes(meta))return false;
+ return req.headers['mcp-method']!==undefined;
+}
+export function writeGetSse(res,req){
+ res.statusCode=200;
+ res.setHeader('Content-Type','text/event-stream');
+ res.setHeader('Cache-Control','no-cache, no-store');
+ res.setHeader('Connection','keep-alive');
+ res.setHeader('X-Accel-Buffering','no');
+ const priming=': connected\n\nretry: 15000\n\n';
+ try{req?.resume?.();}catch{}
+ if(typeof res.write==='function'){
+  if(typeof res.flushHeaders==='function')res.flushHeaders();
+  res.write(priming);
+  req?.socket?.on?.('close',()=>{try{if(!res.writableEnded)res.end();}catch{}});
+  return;
+ }
+ res.end(priming);
+}
+export function writeMcpResponse(req,res,status,payload){
+ const stream=acceptsEventStream(req.headers.accept)&&payload&&(typeof payload.id==='string'||Number.isInteger(payload.id));
+ res.statusCode=status;
+ res.setHeader('Cache-Control','no-store');
+ if(stream){
+  res.setHeader('Content-Type','text/event-stream');
+  res.setHeader('Connection','keep-alive');
+  res.setHeader('X-Accel-Buffering','no');
+  return res.end(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
+ }
+ res.setHeader('Content-Type','application/json');
+ res.end(JSON.stringify(payload));
+}
 function decoded(value){
  if(typeof value!=='string')return null;
  if(value.startsWith('=?base64?')&&value.endsWith('?=')){
@@ -33,7 +75,7 @@ export function prepareProtocol(req,res,rpc){
  req.protocolMessage=rpc;
  if(req.protocolPrepared)return true;
  const protocol=protocolRequest(req,rpc);
- if(protocol.error){res.statusCode=protocol.status??400;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify({jsonrpc:'2.0',...(typeof rpc?.id==='string'||Number.isInteger(rpc?.id)?{id:rpc.id}:{}),error:protocol.error}));return false;}
+ if(protocol.error){writeMcpResponse(req,res,protocol.status??400,{jsonrpc:'2.0',...(typeof rpc?.id==='string'||Number.isInteger(rpc?.id)?{id:rpc.id}:{}),error:protocol.error});return false;}
  req.protocolPrepared=true;
  {
   const end=res.end.bind(res);

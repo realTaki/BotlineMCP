@@ -1,4 +1,4 @@
-import {prepareProtocol,instrumentProtocol} from '../src/protocol.js';
+import {prepareProtocol,instrumentProtocol,usesModernEnvelope,writeGetSse,writeMcpResponse,modernResult} from '../src/protocol.js';
 import {configuration} from '../src/config.js';
 import { App,handler,readBody } from '../src/app.js';
 import { Store } from '../src/store.js';
@@ -8,17 +8,25 @@ export function createEntrypoint(createService=()=>{
 },publicOrigin=()=>process.env.VERCEL_PROJECT_PRODUCTION_URL?'https://'+process.env.VERCEL_PROJECT_PRODUCTION_URL:null){
  let serve, initialized;
  return async function(req,res){
- // Only identity-free discovery may bypass the configured handler.
- if(req.method==='POST'&&req.url.split('?')[0]==='/mcp'){
+ const path=req.url.split('?')[0];
+ if(path==='/mcp'){
   instrumentProtocol(req,res);
   if(req.headers.origin!==undefined&&req.headers.origin!==publicOrigin()){res.statusCode=403;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify({error:'Origin mismatch'}));}
+  if(req.method==='GET')return writeGetSse(res,req);
+ }
+ // Only identity-free discovery may bypass the configured handler.
+ if(req.method==='POST'&&path==='/mcp'){
   try{
    req.body=JSON.parse(await readBody(req));
-   if(!prepareProtocol(req,res,req.body))return;
-   const contextualList=req.body.method==='tools/list'&&['authorization','x-mcp-agent-id','x-mcp-bot-type'].some(h=>req.headers[h]!==undefined);
-   if(!contextualList&&req.body.jsonrpc==='2.0'&&['server/discover','tools/list','events/list'].includes(req.body.method)){
-    res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
-    return res.end(JSON.stringify({jsonrpc:'2.0',id:req.body.id??null,result:await new App({}).rpc(null,req.body.method)}));
+   req.protocolMessage=req.body;
+   if(req.body?.jsonrpc==='2.0'&&typeof req.body.method==='string'&&req.body.id===undefined&&!Array.isArray(req.body)&&req.body.method.startsWith('notifications/')){res.statusCode=202;return res.end();}
+   if(usesModernEnvelope(req,req.body)){
+    if(!prepareProtocol(req,res,req.body))return;
+    const contextualList=req.body.method==='tools/list'&&['authorization','x-mcp-agent-id','x-mcp-bot-type'].some(h=>req.headers[h]!==undefined);
+    if(!contextualList&&req.body.jsonrpc==='2.0'&&['server/discover','tools/list','events/list'].includes(req.body.method)){
+     const payload={jsonrpc:'2.0',id:req.body.id??null,result:modernResult(await new App({}).rpc(null,req.body.method))};
+     return writeMcpResponse(req,res,200,payload);
+    }
    }
   }catch{res.statusCode=400;return res.end('Invalid request');}
  }

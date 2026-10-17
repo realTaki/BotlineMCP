@@ -2,13 +2,16 @@
 
 ## Transport
 
-All clients use MCP `2026-07-28` over `POST /mcp`. Send the protocol version and
-client capabilities in `params._meta`, mirrored by `MCP-Protocol-Version` and
+Streamable HTTP clients (Grok Bot and the official MCP TypeScript SDK) use
+protocol `2025-06-18` on `/mcp`: GET opens an SSE listener, POST sends JSON-RPC,
+and POST responses are `text/event-stream` when `Accept` lists it. Those clients
+call `initialize` then `notifications/initialized`. Envelope clients continue to
+send MCP `2026-07-28` over `POST /mcp` with the protocol version and client
+capabilities in `params._meta`, mirrored by `MCP-Protocol-Version` and
 `Mcp-Method` headers; tool calls also send `Mcp-Name` matching `params.name`.
-Use `server/discover` for capabilities and onboarding instructions. There is no
-initialization handshake or older-protocol fallback. These requirements apply
-to both OAuth and direct API-key clients; authentication does not select a
-protocol revision. See the README for the supported transport scope.
+Use `server/discover` or `initialize` for capabilities and onboarding
+instructions. Authentication does not select a protocol revision. See the README
+for the supported transport scope.
 
 This is a single-owner relay. All API-key and OAuth clients retain the existing
 instance-wide authority. An agent handle is a stable **routing identity**, not a

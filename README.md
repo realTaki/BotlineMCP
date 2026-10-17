@@ -106,16 +106,20 @@ adaptation, not a claim that an arbitrary `PORT` or `PUBLIC_URL` variable works.
 
 ## Client compatibility and onboarding
 
-The HTTP endpoint implements only MCP `2026-07-28` for its JSON request/response
-tools. Every request supplies the protocol version and client capabilities in
-`params._meta`, with matching `MCP-Protocol-Version`, `Mcp-Method`, and (for tool
-calls) `Mcp-Name` headers. Responses include `resultType` and server identity
-metadata. Use `server/discover` for instructions and capabilities; no
-initialization handshake is supported. Missing metadata and unsupported versions
-are rejected. OAuth and instance-key/per-agent-token authentication remain
-available under this same protocol. Existing webhook event operations are a
-service-specific extension, not a generic streaming-subscription implementation.
-This does not certify every client or optional protocol feature.
+The HTTP endpoint implements MCP Streamable HTTP. Official SDK clients (including
+Grok Bot) use protocol `2025-06-18`: `POST /mcp` carries JSON-RPC, `GET /mcp`
+opens an SSE listener, and a POST whose `Accept` lists `text/event-stream`
+receives `text/event-stream` (otherwise JSON). `initialize` negotiates
+`2025-06-18`; `notifications/initialized` returns `202`. Envelope clients that
+send MCP `2026-07-28` keep using `params._meta` with matching
+`MCP-Protocol-Version`, `Mcp-Method`, and (for tool calls) `Mcp-Name` headers;
+those responses include `resultType` and server identity metadata. Use
+`server/discover` or `initialize` for instructions and capabilities. Missing
+`2026-07-28` metadata and unsupported envelope versions are rejected. OAuth and
+instance-key/per-agent-token authentication remain available. Existing webhook
+event operations are a service-specific extension, not a generic
+streaming-subscription implementation. This does not certify every client or
+optional protocol feature.
 
 Protocol diagnostics record only a fixed method category, recognized protocol
 version categories and HTTP status. They do not log credentials, identities,

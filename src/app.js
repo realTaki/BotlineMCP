@@ -1,4 +1,4 @@
-import {SUPPORTED_VERSIONS,SERVER_INFO,prepareProtocol,instrumentProtocol} from './protocol.js';
+import {SUPPORTED_VERSIONS,SERVER_INFO,STREAMABLE_HTTP_VERSION,prepareProtocol,instrumentProtocol,usesModernEnvelope,writeGetSse,writeMcpResponse,modernResult} from './protocol.js';
 import {INSTANCE_ID} from './config.js';
 import {authenticatePrincipal,oauth} from './oauth.js';
 import {registerAgent,listAgents,getAgent,resolveCallerAgent,rotateAgentToken,callerTokenProperty} from './agents.js';
@@ -188,6 +188,8 @@ export class App {
     return tools.filter(t=>!excluded.includes(t.name));
   }
   async rpcCall(owner,method,p={},principal={owner,agentId:null},botType=null) {
+    if(method==='initialize')return {protocolVersion:STREAMABLE_HTTP_VERSION,capabilities:{tools:{}},serverInfo:SERVER_INFO,instructions:agentInstructions};
+    if(method==='ping')return {};
     if(method==='server/discover')return {resultType:'complete',supportedVersions:SUPPORTED_VERSIONS,capabilities:{tools:{},events:{}},_meta:{'io.modelcontextprotocol/serverInfo':SERVER_INFO},instructions:agentInstructions,serverInfo:{...SERVER_INFO,description:serviceDescription}};
     if(method==='tools/list')return {tools:await this.availableTools(principal,botType)};
     if(method==='events/list')return {events:[eventDefinition,...dmEvents]};
@@ -298,20 +300,26 @@ export function handler(app) {
       return send(done?200:503,{ok:done});
     }
     if(path==='/mcp')instrumentProtocol(req,res);
-    requireThat(path==='/mcp','Not found',404);requireThat(req.method==='POST','Only POST supported',405);
+    requireThat(path==='/mcp','Not found',404);
     if(req.headers.origin!==undefined)requireThat(req.headers.origin===app.origin,'Origin mismatch',403);
+    if(req.method==='GET')return writeGetSse(res,req);
+    if(req.method!=='POST'){res.setHeader('Allow','GET, POST');requireThat(false,'Only GET and POST supported',405);}
     const rpc=JSON.parse(await readBody(req));
-    if(!prepareProtocol(req,res,rpc))return;
+    req.protocolMessage=rpc;
+    if(rpc?.jsonrpc==='2.0'&&typeof rpc.method==='string'&&rpc.id===undefined&&!Array.isArray(rpc)&&rpc.method.startsWith('notifications/')){res.statusCode=202;return res.end();}
+    if(usesModernEnvelope(req,rpc)){if(!prepareProtocol(req,res,rpc))return;}
+    else requireThat(rpc?.jsonrpc==='2.0'&&typeof rpc.method==='string'&&!Array.isArray(rpc)&&(typeof rpc.id==='string'||Number.isInteger(rpc.id)),'Invalid JSON-RPC');
     const botType=parseBotType(req.headers['x-mcp-bot-type']);
-    const publicMethods=['server/discover','tools/list','events/list'];
+    const publicMethods=['server/discover','tools/list','events/list','initialize','ping'];
     let owner,principal;
     if(!publicMethods.includes(rpc.method)||(rpc.method==='tools/list'&&(req.headers.authorization!==undefined||req.headers['x-mcp-agent-id']!==undefined))){
       principal=await authenticatePrincipal(app,req);owner=principal.owner;
     }
     requireThat(rpc?.jsonrpc==='2.0'&&typeof rpc.method==='string'&&!Array.isArray(rpc),'Invalid JSON-RPC');
-    try {return send(200,{jsonrpc:'2.0',id:rpc.id,result:await app.rpc(owner,rpc.method,rpc.params,principal,botType)});}
-    catch(e){return send(200,{jsonrpc:'2.0',id:rpc.id,error:{code:e.rpcCode??-32602,message:e.status&&e.status<500?e.message:'Request failed',data:{...relayErrorDetails(errorCode(e)),...e.details,...(e.reason?{reason:e.reason}:{})}}});}
-  } catch(e) {if(e.status===401)res.setHeader('WWW-Authenticate',`Bearer resource_metadata="${app.origin}/.well-known/oauth-protected-resource", scope="bot:manage"`);return send(e.status??500,{error:e.status&&e.status<500?e.message:'Request failed',...relayErrorDetails(errorCode(e)),...e.details});}
+    const sendRpc=(status,payload)=>{if(req.protocolPrepared&&payload.result)payload={...payload,result:modernResult(payload.result)};if(payload.error?.code===-32601)status=404;return writeMcpResponse(req,res,status,payload);};
+    try {return sendRpc(200,{jsonrpc:'2.0',id:rpc.id,result:await app.rpc(owner,rpc.method,rpc.params,principal,botType)});}
+    catch(e){return sendRpc(200,{jsonrpc:'2.0',id:rpc.id,error:{code:e.rpcCode??-32602,message:e.status&&e.status<500?e.message:'Request failed',data:{...relayErrorDetails(errorCode(e)),...e.details,...(e.reason?{reason:e.reason}:{})}}});}
+  } catch(e) {if(e.status===401)res.setHeader('WWW-Authenticate',`Bearer resource_metadata="${app.origin}/.well-known/oauth-protected-resource", scope="bot:manage"`);if(e.status===405)res.setHeader('Allow','GET, POST');return send(e.status??500,{error:e.status&&e.status<500?e.message:'Request failed',...relayErrorDetails(errorCode(e)),...e.details});}
  };
 }
 
