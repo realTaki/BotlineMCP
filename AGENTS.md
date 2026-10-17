@@ -27,6 +27,9 @@
 - Keep compatibility explicit. Preserve existing identities, OAuth lineages,
   unassigned legacy routes and recoverable metadata. Do not silently claim,
   migrate, replace or delete a binding to resolve ambiguity.
+- Cursor forwards to Grok Bot use `[handle.type@botline]:`, then a newline and the
+  original participant text. Encode the handle so `.` and `@` cannot forge the type.
+  Types follow the existing platform judgment: `user`, `grokbot`, `chatgpt`, or `agent`.
 
 ## Identity, privacy and authorization
 

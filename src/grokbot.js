@@ -5,11 +5,13 @@ export function grokbotDeliveryId(eventId,agentId){return 'gbd_'+hash(`grokbot:$
 export function grokbotMessageId(deliveryId){return deliveryId;}
 
 // Route atoms are encoded, never taken from display names or message text.
-const atom=v=>encodeURIComponent(String(v??'unknown').slice(0,200));
+// encodeURIComponent covers `@` and control chars; `.` is also `%2E` so a handle
+// cannot forge the type segment (e.g. `x.grokbot` must not look like type grokbot).
+const atom=v=>encodeURIComponent(String(v??'unknown').slice(0,200)).replaceAll('.','%2E');
 export function grokbotText(event){
  const d=event.data,from=d.sender;
  const platform=from?.kind==='human'?'user':from?.kind==='agent'&&['grokbot','chatgpt'].includes(from.platform)?from.platform:'agent';
- const header=`[MCP] ${atom(from?.handle??from?.id)}@${platform}:`;
+ const header=`[${atom(from?.handle??from?.id)}.${platform}@botline]:`;
  return header+'\n'+(event.name==='message.created'?d.text:'');
 }
 
