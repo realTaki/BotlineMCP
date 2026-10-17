@@ -1,16 +1,19 @@
+import {prepareProtocol} from '../src/protocol.js';
 import {configuration} from '../src/config.js';
 import { App,handler,readBody } from '../src/app.js';
 import { Store } from '../src/store.js';
 export function createEntrypoint(createService=()=>{
  const config=configuration(process.env),store=new Store(config.databaseUrl);
  return {serve:handler(new App({store,...config})),initialized:store.initialize()};
-}){
+},publicOrigin=()=>process.env.VERCEL_PROJECT_PRODUCTION_URL?'https://'+process.env.VERCEL_PROJECT_PRODUCTION_URL:null){
  let serve, initialized;
  return async function(req,res){
  // Only identity-free discovery may bypass the configured handler.
  if(req.method==='POST'&&req.url.split('?')[0]==='/mcp'){
+  if(req.headers.origin!==undefined&&req.headers.origin!==publicOrigin()){res.statusCode=403;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify({error:'Origin mismatch'}));}
   try{
    req.body=JSON.parse(await readBody(req));
+   if(!prepareProtocol(req,res,req.body))return;
    const contextualList=req.body.method==='tools/list'&&['authorization','x-mcp-agent-id','x-mcp-bot-type'].some(h=>req.headers[h]!==undefined);
    if(!contextualList&&req.body.jsonrpc==='2.0'&&['server/discover','initialize','ping','tools/list','events/list'].includes(req.body.method)){
     res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
