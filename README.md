@@ -153,7 +153,7 @@ Register each human once using a confirmed handle and Telegram user ID. Each ID 
 unique across the human registry. Display names and message text are not identity
 proof. One registration admits that human to every bound bot in the instance.
 
-Changing an existing human's Telegram ID or display name in 0.6.13 requires a
+Changing an existing human's Telegram ID or display name in 0.6.15 requires a
 five-minute challenge sent to exactly one existing agent of the other supported
 type (dot ↔ Grok Bot). Zero or multiple eligible peers fail closed. The receiving
 agent must show the code to the human in its own native channel and must not relay

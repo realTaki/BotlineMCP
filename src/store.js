@@ -42,7 +42,7 @@ export class Store {
     finally {client.release();}
   }
   constructor(url) { this.pool = new pg.Pool({connectionString:url,max:3,connectionTimeoutMillis:5000,idleTimeoutMillis:10000}); }
-  async initialize() { await this.pool.query('CREATE TABLE IF NOT EXISTS mcp_records (kind text NOT NULL, id text NOT NULL, value jsonb NOT NULL, PRIMARY KEY(kind,id))'); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_owner ON mcp_records (kind, (value->>'owner'))"); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_denied_expiry ON mcp_records (((value->>'expires')::bigint)) WHERE kind='denied_limit' OR (kind='update' AND value->>'denied'='true')"); await this.pruneDeniedReplies(); }
+  async initialize() { await this.pool.query('CREATE TABLE IF NOT EXISTS mcp_records (kind text NOT NULL, id text NOT NULL, value jsonb NOT NULL, PRIMARY KEY(kind,id))'); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_owner ON mcp_records (kind, (value->>'owner'))"); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_denied_expiry ON mcp_records (((value->>'expires')::bigint)) WHERE kind='denied_limit' OR (kind='update' AND value->>'denied'='true')"); await this.pool.query('DROP INDEX IF EXISTS mcp_records_access_notice_expiry'); await this.pool.query('DROP INDEX IF EXISTS mcp_records_access_notice_bot'); await this.pruneDeniedReplies(); }
   async get(kind, id) { return (await this.pool.query('SELECT value FROM mcp_records WHERE kind=$1 AND id=$2',[kind,id])).rows[0]?.value; }
   async put(kind,id,value) { await this.pool.query('INSERT INTO mcp_records(kind,id,value) VALUES($1,$2,$3) ON CONFLICT(kind,id) DO UPDATE SET value=EXCLUDED.value',[kind,id,value]); }
   async insert(kind,id,value) { return (await this.pool.query('INSERT INTO mcp_records(kind,id,value) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id',[kind,id,value])).rowCount === 1; }
@@ -54,7 +54,7 @@ export class Store {
   }
   async take(kind,id) { return (await this.pool.query('DELETE FROM mcp_records WHERE kind=$1 AND id=$2 RETURNING value',[kind,id])).rows[0]?.value; }
   async pruneDeniedReplies(now=Date.now()) {
-    await this.pool.query(`DELETE FROM mcp_records WHERE (kind='denied_limit' OR (kind='update' AND value->>'denied'='true')) AND (value->>'expires')::bigint<=$1`,[now]);
+    await this.pool.query(`DELETE FROM mcp_records WHERE (kind='denied_limit' OR kind='oauth_limit' OR (kind='update' AND value->>'denied'='true')) AND (value->>'expires')::bigint<=$1`,[now]);
   }
   async reserveDeniedReply(botId,updateId,senderId,chatId,now=Date.now()) {
     // Expiry cleanup runs on initialization and denied traffic, including other

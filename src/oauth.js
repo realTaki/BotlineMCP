@@ -2,6 +2,20 @@ import {INSTANCE_ID} from './config.js';
 import {createHash} from 'node:crypto';
 import {hash,nonce,requireThat,same,escapeHtml} from './security.js';
 import {getAgent,registerAgent} from './agents.js';
+export const OAUTH_CONSENT_LIMIT=Object.freeze({windowMs:10*60*1000,max:30});
+function consentLimiterId(req){
+ const forwarded=req.headers['x-forwarded-for'];
+ const ip=typeof forwarded==='string'&&forwarded.trim()?forwarded.split(',')[0].trim():(typeof req.socket?.remoteAddress==='string'?req.socket.remoteAddress:'unknown');
+ return hash('oauth-authorize:'+ip);
+}
+async function consumeConsentLimit(app,req){
+ const now=Date.now(),id=consentLimiterId(req);
+ const current=await app.store.get('oauth_limit',id);
+ const window=current&&Number.isFinite(current.window)&&current.window>now-OAUTH_CONSENT_LIMIT.windowMs?current.window:now;
+ const count=window===current?.window&&Number.isFinite(current.count)?current.count:0;
+ requireThat(count<OAUTH_CONSENT_LIMIT.max,'Too many authorization attempts; retry later',429);
+ await app.store.put('oauth_limit',id,{window,count:count+1,expires:window+OAUTH_CONSENT_LIMIT.windowMs});
+}
 export async function authenticate(app,req){
  return (await authenticatePrincipal(app,req)).owner;
 }
@@ -40,6 +54,7 @@ export async function oauth(app,req,path,readBody,send,res){
   return send(201,{client_id:id,redirect_uris:p.redirect_uris,token_endpoint_auth_method:'none',grant_types:['authorization_code','refresh_token'],response_types:['code']});
  }
  if(path==='/oauth/authorize'&&req.method==='GET'){
+  await consumeConsentLimit(app,req);
   const p=Object.fromEntries(new URL(req.url,app.origin).searchParams),client=await app.store.get('client',p.client_id);
   requireThat(client&&client.redirects.includes(p.redirect_uri),'Unknown client or redirect');
   requireThat(p.response_type==='code'&&p.code_challenge_method==='S256'&&/^[A-Za-z0-9_-]{43}$/.test(p.code_challenge),'PKCE S256 is required');
@@ -49,6 +64,7 @@ export async function oauth(app,req,path,readBody,send,res){
   return send(200,`<!doctype html><meta charset="utf-8"><title>Authorize BotlineMCP</title><h1>Connect your agent</h1><p>This authorizes the requesting client to manage bots, read allowed Telegram messages, send Telegram messages, and exchange private direct messages with logical agents. Enter your API KEY (configured as MCP_API_KEY). Every connected client has the same authority to manage this private relay and all its bot bindings. Logical agent handles identify message senders and recipients; they do not isolate permissions or create separate accounts. After authorization, your agent registers its own stable handle and display name through MCP, then sets up its main notification subscription. No agent identity entry is needed on this page. Never enter a Telegram bot token here. By submitting, you authorize this client to act with the privileges of the credential you enter.</p><p>Return to: ${escapeHtml(p.redirect_uri)}</p><form method="post" action="/oauth/authorize"><input type="hidden" name="ticket" value="${ticket}"><label>API KEY <input type="password" name="credential" autocomplete="off" required></label><button type="submit">Authorize</button></form>`,'text/html; charset=utf-8');
  }
  if(path==='/oauth/authorize'&&req.method==='POST'){
+  await consumeConsentLimit(app,req);
   requireThat(req.headers.origin===app.origin,'Origin mismatch',403);
   const p=new URLSearchParams(await readBody(req,8192));
   const c=await app.store.take('consent',hash(p.get('ticket')??''));requireThat(c&&c.expires>Date.now(),'Consent request expired');

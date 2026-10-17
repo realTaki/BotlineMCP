@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {App,handler,tools} from '../src/app.js';
 import {DENIED_REPLY_POLICY,nextDeniedReplyState} from '../src/denied-replies.js';
+import {OAUTH_CONSENT_LIMIT} from '../src/oauth.js';
 import {INSTANCE_ID} from '../src/config.js';
 import {hash,seal,unseal,signedHeaders,publicAddress,signingKey} from '../src/security.js';
 import {telegramHumanAllowed} from '../src/telegram-policy.js';
@@ -66,9 +67,33 @@ test('transient failure retained; retry stable event ID; unsubscribe cancels pen
 test('410 is terminal, no automatic resend',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);await f.app.subscribe(INSTANCE_ID,subscription);f.setStatus(410);const b=await f.store.get('bot','123');assert(await f.app.receive('123',b.hookSecret,message()));assert.equal((await f.store.list('delivery'))[0].state,'failed');const n=f.sent.length;await f.app.dispatch(INSTANCE_ID);assert.equal(f.sent.length,n);});
 test('send request IDs prevent duplicates and conflicting payload reuse',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);const a={bot_id:'123',chat_id:'42',text:'test',request_id:'test-request-1'};await f.app.invoke(INSTANCE_ID,'telegram_send_message',a);await f.app.invoke(INSTANCE_ID,'telegram_send_message',a);assert.equal(f.calls.filter(c=>c.method==='sendMessage').length,1);await assert.rejects(f.app.invoke(INSTANCE_ID,'telegram_send_message',{...a,text:'changed'}));});
 test('uncertain sends do not auto retry',async()=>{const f=fixture();await f.app.bind(INSTANCE_ID,bind);await admit(f);f.failSend();const a={bot_id:'123',chat_id:'42',text:'test',request_id:'test-request-2'};await assert.rejects(f.app.invoke(INSTANCE_ID,'telegram_send_message',a));assert.equal((await f.app.invoke(INSTANCE_ID,'telegram_send_message',a)).status,'uncertain');assert.equal(f.calls.filter(c=>c.method==='sendMessage').length,1);});
-test('MCP HTTP permits public discovery',async()=>{const f=fixture();async function request(headers={}){let output;const req=Readable.from([JSON.stringify({jsonrpc:'2.0',id:1,method:'server/discover'})]);Object.assign(req,{headers,url:'/mcp',method:'POST'});const res={setHeader(){},end(b){output=JSON.parse(b);}};await handler(f.app)(req,res);return{status:res.statusCode,output};}assert.equal((await request()).status,200);const r=await request({authorization:'Bearer '+instanceKey});assert.equal(r.output.result.supportedVersions[0],'2026-07-28');});
+test('MCP HTTP permits public discovery',async()=>{const f=fixture();async function request(headers={}){let output;const req=Readable.from([JSON.stringify({jsonrpc:'2.0',id:1,method:'server/discover'})]);Object.assign(req,{headers,url:'/mcp',method:'POST'});const res={setHeader(){},end(b){output=JSON.parse(b);}};await handler(f.app)(req,res);return{status:res.statusCode,output};}assert.equal((await request()).status,200);const r=await request({authorization:'Bearer '+instanceKey});assert.equal(r.output.result.supportedVersions[0],'2025-06-18');});
+test('server/discover and initialize advertise the same handshake protocol version',async()=>{
+ const app=new App({});const discover=await app.rpc(null,'server/discover'),init=await app.rpc(null,'initialize');
+ assert.equal(init.protocolVersion,'2025-06-18');assert.deepEqual(discover.supportedVersions,['2025-06-18']);
+});
 async function httpRequest(app,path,method='GET',body='',headers={}){const req=Readable.from(body?[body]:[]);Object.assign(req,{url:path,method,headers});const response={headers:{},setHeader(k,v){this.headers[k]=v;},end(b){this.body=b??'';}};await handler(app)(req,response);return response;}
 test('OAuth registration rejects arbitrary redirect hosts',async()=>{const f=fixture();const r=await httpRequest(f.app,'/oauth/register','POST',JSON.stringify({redirect_uris:['https://attacker.example/callback']}));assert.equal(r.statusCode,400);});
+test('OAuth consent GET and POST share a storage-backed limiter',async()=>{
+ const f=fixture(),ip={'x-forwarded-for':'203.0.113.10'};
+ async function registered(app){
+  const reg=JSON.parse((await httpRequest(app,'/oauth/register','POST',JSON.stringify({redirect_uris:['https://chatgpt.com/connector/oauth/callback']}))).body);
+  return '/oauth/authorize?'+new URLSearchParams({client_id:reg.client_id,redirect_uri:reg.redirect_uris[0],response_type:'code',code_challenge_method:'S256',code_challenge:'a'.repeat(43),resource:app.origin+'/mcp',state:'limit-test'});
+ }
+ const path=await registered(f.app);
+ for(let n=0;n<OAUTH_CONSENT_LIMIT.max;n++)assert.equal((await httpRequest(f.app,path,'GET','',ip)).statusCode,200);
+ assert.equal((await httpRequest(f.app,path,'GET','',ip)).statusCode,429);
+ assert.equal((await f.store.list('consent')).length,OAUTH_CONSENT_LIMIT.max);
+ assert(!JSON.stringify([...f.store.data]).includes('203.0.113.10'));
+ const g=fixture(),gPath=await registered(g.app);
+ const page=await httpRequest(g.app,gPath,'GET','',ip);
+ const ticket=/name="ticket" value="([^"]+)"/.exec(page.body)[1];
+ const post={origin:g.app.origin,...ip};
+ const body=new URLSearchParams({ticket,credential:instanceKey}).toString();
+ assert.equal((await httpRequest(g.app,'/oauth/authorize','POST',body,post)).statusCode,303);
+ for(let n=2;n<OAUTH_CONSENT_LIMIT.max;n++)assert.equal((await httpRequest(g.app,'/oauth/authorize','POST',body,post)).statusCode,400);
+ assert.equal((await httpRequest(g.app,'/oauth/authorize','POST',body,post)).statusCode,429);
+});
 test('OAuth consent, PKCE exchange, resource binding, refresh and revocation',async()=>{
  const f=fixture();const reg=JSON.parse((await httpRequest(f.app,'/oauth/register','POST',JSON.stringify({redirect_uris:['https://chatgpt.com/connector/oauth/callback']}))).body);
  const verifier='a'.repeat(50),{createHash}=await import('node:crypto'),challenge=createHash('sha256').update(verifier).digest('base64url');

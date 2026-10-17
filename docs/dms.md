@@ -271,7 +271,7 @@ senders are identified accurately without inferring ownership. Only message
 presentation changes; transport, credentials, session selection and retry IDs do not.
 
 
-## Authenticated tool profiles (v0.6.5)
+## Authenticated tool profiles (v0.6.15)
 
 - Anonymous discovery or an authenticated connection with no header or OAuth
   session identity returns the full thirteen-tool catalog. Listing a write tool does
@@ -321,7 +321,7 @@ no credentials or permissions are changed, and a mismatched list alone does not
 identify the cause.
 
 
-### Existing-human changes (0.6.13)
+### Existing-human changes (0.6.15)
 
 First registration and identical requests retain their behavior. A change to an
 existing human Telegram ID or display name now returns `confirmation_required`,
