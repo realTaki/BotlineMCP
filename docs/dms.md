@@ -197,6 +197,16 @@ credentials, raw secret-bearing URLs or stack traces.
 - Handle-bound Telegram webhooks acknowledge after buffering/dispatch even if a
   dot listener is missing. Outbound Telegram sends persist an uncertain marker
   first; ambiguous sends are not retried automatically. Reuse `request_id`.
+- Admitted inbound private DMs get Telegram delivery-receipt reactions on the
+  original message, using Bot API `setMessageReaction` with confirmed
+  `ReactionTypeEmoji` values: 🕊 after admission and persist (server received),
+  👀 after the agent path accepts the payload (Grok Bot: `api.cursor.com` 2xx;
+  webhook agents: `message.created` queued and notified; dot: inbox row queued
+  and `inbox.ready` notified), and 💔 after a terminal delivery failure (not an
+  in-progress retry). Messages rejected at admission, including unregistered
+  private DMs and ignored groups, receive no reaction. A failed reaction is
+  logged only; it does not change persist/dispatch, is not retried on the main
+  path, and is not a substitute for send-intent receipts.
 
 ## Private-DM live acceptance
 
@@ -208,10 +218,14 @@ After deployment and owner approval:
    no listener. Bind the bot and check `telegram_bot_get`.
 2. Use `human_register` once for a confirmed human handle/Telegram ID. That
    human may then DM every bound bot.
-3. Send an authorized private Telegram message. For dot, confirm `inbox.ready`,
-   then read the body with the human handle through `messages_inbox`; ACK only
-   after processing. Other webhook agents receive `message.created`. Grok Bot
-   destinations receive the compact BotlineMCP sender header in their Cursor session.
+3. Send an authorized private Telegram message. The original Telegram message
+   should show 🕊 once BotlineMCP persisted it, then 👀 once the agent path
+   accepted it, or 💔 if delivery ended in a terminal failure. For dot, confirm
+   `inbox.ready`, then read the body with the human handle through
+   `messages_inbox`; ACK only after processing. Other webhook agents receive
+   `message.created`. Grok Bot destinations receive the compact BotlineMCP
+   sender header in their Cursor session. A visible reaction is not proof the
+   agent executed or replied.
 4. Reply with `messages_send({ to: <human handle>, text, request_id })`. Inspect
    the Telegram outcome. Reuse the same request ID after ambiguity.
 5. Send an agent-to-agent DM by handle (for example a Grok Bot with

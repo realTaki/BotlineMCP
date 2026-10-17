@@ -3,7 +3,7 @@
 [GitHub repository](https://github.com/realTaki/BotlineMCP)
 
 A self-hosted, single-owner relay between agents and Telegram private messages.
-This documentation targets source version **0.6.20**. Configure `MCP_API_KEY`,
+This documentation targets source version **0.6.21**. Configure `MCP_API_KEY`,
 use `X-MCP-*` client headers, and identify forwarded messages by the
 `[handle.type@botline]:` routing line. Newly issued agent tokens use the `mcp_at_` prefix.
 
@@ -30,6 +30,12 @@ isolation or separate privilege levels. Do not expose this as a shared public se
 
 - Telegram sends authenticated webhook updates to `/telegram/:botId`. The relay
   checks the registered human, private-chat sender and current bot binding.
+  After an admitted private DM is persisted, the bound bot sets 🕊 on that
+  Telegram message (server received). After the target agent is notified — Grok
+  Bot `api.cursor.com` 2xx, or a webhook/`inbox.ready` callback 2xx with the
+  payload queued — the reaction becomes 👀. A terminal delivery failure becomes
+  💔. Admission rejects and groups get no reaction. Reaction calls are
+  opportunistic and log-only; they never retry in a way that blocks relay.
 - **dot:** exactly handle `dot`, without a Grok Bot destination. One
   `agent.notification` subscription with empty arguments receives `inbox.ready`.
   The agent calls `messages_inbox`, processes each item and explicitly calls

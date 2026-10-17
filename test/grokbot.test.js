@@ -5,6 +5,8 @@ import {Dms} from '../src/dms.js';
 import {registerAgent,listAgents} from '../src/agents.js';
 import {grokbotSession,grokbotMessage,GROKBOT_API_ORIGIN} from '../src/grokbot-api.js';
 import {grokbotText,grokbotDeliveryId,grokbotMessageId,setCursorKey,clearCursorKey} from '../src/grokbot.js';
+import {configureHuman} from '../src/telegram-owner.js';
+import {INBOUND_REACTIONS,waitInboundReactions} from '../src/telegram-reactions.js';
 const owner='mcp:admin',root={owner,authType:'api_key'};
 const CURSOR_KEY='cursor-secret-TESTKEY-do-not-leak';
 class MemoryStore {
@@ -39,14 +41,15 @@ function mockGrokbot({status=200,delivery='accepted_temporal',sessionId='sess_ex
  return {calls,fetchImpl};
 }
 async function fixture({status=200,delivery='accepted_temporal',grokbot,cursorKey=CURSOR_KEY}={}){
- const events=[],api=mockGrokbot({status,delivery});
+ const events=[],telegram=[],api=mockGrokbot({status,delivery});
  const app=new App({store:new MemoryStore(),instanceKey:'x'.repeat(64),key:Buffer.alloc(32,7).toString('base64'),origin:'https://mcp.example',
   post:async(url,h,body)=>{const e=JSON.parse(body);if(e.type!=='verification')events.push({url,event:e});return {status:200,body:JSON.stringify({challenge:e.challenge})};},
+  telegram:async(t,method,args)=>{telegram.push({method,args});return {ok:true};},
   grokbotFetch:api.fetchImpl,...(grokbot?{grokbot}:{})});
  const a=await registerAgent(app,root,{handle:'alpha'});
  const b=await registerAgent(app,root,{handle:'DEV.GrokBot',grokbot_agent_name:'Example Grok Bot',...(cursorKey?{cursor_api_key:cursorKey}:{})});
  const p=x=>({owner,agentId:x.agent_id,authType:'api_key'});
- return {app,g:new Dms(app),events,api,a:p(a),b:p(b),bAgent:b};
+ return {app,g:new Dms(app),events,telegram,api,a:p(a),b:p(b),bAgent:b};
 }
 function leak(haystack,secret){return JSON.stringify(haystack).includes(secret);}
 
@@ -221,4 +224,23 @@ test('provider error bodies are never read or reflected and retry statuses remai
   await assert.rejects(grokbotSession(CURSOR_KEY,'Synthetic',{fetchImpl}),e=>{assert.equal(e.status,expected);assert(e.message.startsWith('Cursor API '));for(const part of ['sk-private','person@example.test','private text','123456789','other-token'])assert(!e.message.includes(part));return true;});
   assert.deepEqual(await grokbotMessage(CURSOR_KEY,'session','body','message-id',{fetchImpl}),{status:expected});assert.equal(reads,0);
  }
+});
+
+const reactionEmojis=calls=>calls.filter(c=>c.method==='setMessageReaction').map(c=>c.args.reaction[0].emoji);
+async function inboundGrokbot(f){
+ await f.app.store.put('bot','123',{id:'123',owner,active:true,token:f.app.encrypt('synthetic'),hookSecret:'hook'});
+ await f.app.store.put('group_bot','123',{owner,agentId:f.b.agentId});
+ await configureHuman(f.app,owner,{human_handle:'person',telegram_user_id:'42'});
+ return {message_id:11,from:{id:42,is_bot:false,first_name:'Owner'},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'to grokbot'};
+}
+
+test('inbound Telegram DMs to a Grok Bot react delivered after api.cursor.com accepts and failed on terminal rejection',async()=>{
+ const ok=await fixture();const dm=await inboundGrokbot(ok);
+ await ok.app.receive('123','hook',{update_id:1,message:dm});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(ok.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ assert.equal(ok.api.calls.filter(c=>c.url.includes('/messages')).length,1);
+
+ const failed=await fixture({grokbot:async()=>({status:400})});const failDm=await inboundGrokbot(failed);
+ await failed.app.receive('123','hook',{update_id:2,message:failDm});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(failed.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.failed]);
 });

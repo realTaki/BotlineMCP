@@ -38,7 +38,9 @@ and a clear list of intended external messages and configuration changes.
 3. Bind the approved bot; verify bot state and webhook update types independently.
    Register the human only after confirming their Telegram identity.
 4. Follow the [private-DM live acceptance procedure](dms.md#private-dm-live-acceptance).
-   Confirm inbound payload, agent processing and visible reply as separate results.
+   Confirm inbound payload, Telegram receipt reactions (🕊 / 👀 / 💔), agent
+   processing and visible reply as separate results. A reaction is not proof the
+   agent ran.
 5. For human configuration changes, verify the code is shown on the other agent's
    native channel and the human chooses whether to transfer it. Do not automate
    code relay or describe this as server-proven human presence.
