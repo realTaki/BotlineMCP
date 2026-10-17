@@ -70,7 +70,9 @@ test('uncertain sends do not auto retry',async()=>{const f=fixture();await f.app
 test('MCP HTTP permits public discovery',async()=>{const f=fixture();const r=await httpRequest(f.app,'/mcp','POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'server/discover'}));assert.equal(r.statusCode,200);assert.deepEqual(JSON.parse(r.body).result.supportedVersions,['2026-07-28']);});
 test('server discovery advertises only the supported stateless revision',async()=>{
  const app=new App({});assert.deepEqual((await app.rpc(null,'server/discover')).supportedVersions,['2026-07-28']);
- for(const method of ['initialize','ping'])await assert.rejects(app.rpc(null,method),/Method not found/);
+ const init=await app.rpc(null,'initialize',{protocolVersion:'2025-11-25'});
+ assert.equal(init.protocolVersion,'2025-06-18');assert.equal(init.serverInfo.name,'BotlineMCP');assert.deepEqual(init.capabilities,{tools:{}});
+ assert.deepEqual(await app.rpc(null,'ping'),{});
 });
 function modernWire(body,headers){
  const rpc=JSON.parse(body);rpc.params={...rpc.params,_meta:{'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{},...rpc.params?._meta}};
@@ -659,6 +661,43 @@ test('modern production discovery and fresh OAuth tools use stateless envelopes 
  assert.equal(f.sent.length,0);assert.equal(f.calls.length,0);
 });
 
+
+function rawMcp(app,method='GET',body='',headers={}){
+ const req=Readable.from(body?[body]:[]);Object.assign(req,{url:'/mcp',method,headers});
+ const response={headers:{},statusCode:200,setHeader(k,v){this.headers[k]=v;},write(b){this.body=(this.body??'')+b;return true;},end(b){if(b)this.write(b);this.writableEnded=true;}};
+ return handler(app)(req,response).then(()=>response);
+}
+function sseJson(body){
+ const line=String(body).split('\n').find(l=>l.startsWith('data: '));
+ assert(line,body);return JSON.parse(line.slice(6));
+}
+
+test('Streamable HTTP GET is an SSE stream and POST honors Accept event-stream',async()=>{
+ const f=fixture(),accept={'accept':'application/json, text/event-stream',authorization:'Bearer '+instanceKey,'x-mcp-bot-type':'grokbot'};
+ const get=await rawMcp(f.app,'GET','',{accept:'text/event-stream'});
+ assert.equal(get.statusCode,200);assert.equal(get.headers['Content-Type'],'text/event-stream');assert.match(get.body,/^: connected\n\nretry: 15000\n\n$/);assert.equal(get.writableEnded,undefined);
+ assert.equal((await rawMcp(f.app,'GET','',{accept:'text/event-stream',origin:'https://evil.example'})).statusCode,403);
+ const denied=await rawMcp(f.app,'DELETE');assert.equal(denied.statusCode,405);assert.equal(denied.headers.Allow,'GET, POST');
+ const initialized=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'sdk',version:'1'}}}),accept);
+ assert.equal(initialized.statusCode,200);assert.equal(initialized.headers['Content-Type'],'text/event-stream');
+ const handshake=sseJson(initialized.body);assert.equal(handshake.result.protocolVersion,'2025-06-18');assert.equal(handshake.result.serverInfo.name,'BotlineMCP');assert.deepEqual(handshake.result.capabilities,{tools:{}});
+ const notice=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'}),accept);
+ assert.equal(notice.statusCode,202);assert.equal(notice.body??'','');
+ const who=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{...accept,'mcp-protocol-version':'2025-06-18'});
+ assert.equal(who.statusCode,200);assert.equal(who.headers['Content-Type'],'text/event-stream');
+ const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.20');
+ const jsonWho=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{authorization:'Bearer '+instanceKey,'mcp-protocol-version':'2025-06-18','accept':'application/json'});
+ assert.equal(jsonWho.headers['Content-Type'],'application/json');assert.equal(JSON.parse(jsonWho.body).result.structuredContent.registered,false);
+});
+
+test('production entry serves Streamable HTTP GET without waiting on the database',async()=>{
+ const {createEntrypoint}=await import('../api/index.js');
+ let starts=0;const entry=createEntrypoint(()=>{starts++;throw new Error('database must not start for GET');},()=> 'https://mcp.example.com');
+ const req=Readable.from([]);Object.assign(req,{url:'/mcp',method:'GET',headers:{accept:'text/event-stream'}});
+ const res={headers:{},setHeader(k,v){this.headers[k]=v;},write(body){this.body=(this.body??'')+body;return true;},end(body){if(body)this.write(body);this.writableEnded=true;},flushHeaders(){}};
+ await entry(req,res);
+ assert.equal(res.statusCode,200);assert.equal(res.headers['Content-Type'],'text/event-stream');assert.match(res.body,/^: connected\n\nretry: 15000\n\n$/);assert.equal(res.writableEnded,undefined);assert.equal(starts,0);
+});
 
 test('direct development handler enforces the same modern protocol contract',async()=>{
  const f=fixture(),meta={'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientCapabilities':{}};
