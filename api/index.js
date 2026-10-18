@@ -1,7 +1,7 @@
 import {prepareProtocol,instrumentProtocol,usesModernEnvelope,writeGetSse,writeMcpResponse,modernResult} from '../src/protocol.js';
 import {configuration} from '../src/config.js';
 import { App,handler,readBody } from '../src/app.js';
-import {tryLanding} from '../src/landing.js';
+import {tryLanding,tryMcpGuide} from '../src/landing.js';
 import { Store } from '../src/store.js';
 export function createEntrypoint(createService=()=>{
  const config=configuration(process.env),store=new Store(config.databaseUrl);
@@ -14,7 +14,7 @@ export function createEntrypoint(createService=()=>{
  if(path==='/mcp'){
   instrumentProtocol(req,res);
   if(req.headers.origin!==undefined&&req.headers.origin!==publicOrigin()){res.statusCode=403;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify({error:'Origin mismatch'}));}
-  if(req.method==='GET')return writeGetSse(res,req);
+  if(req.method==='GET'){if(tryMcpGuide(req,res))return;return writeGetSse(res,req);}
  }
  // Only identity-free discovery may bypass the configured handler.
  if(req.method==='POST'&&path==='/mcp'){

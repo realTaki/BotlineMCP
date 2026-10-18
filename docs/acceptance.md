@@ -85,3 +85,12 @@ Muse uses `muse`, dot `chatgpt`, Grok `grokbot`, humans `user`; unknown historic
 agent platforms remain `agent`. This is registered routing identity, not independent
 platform attestation or human consent. Storage retains the original body, so reads
 do not stack headers. ACK and deduplication still use `message_id`, not text.
+
+## Onboarding regression checks
+
+`test/onboarding.test.js` checks both HTTP entrypoints for explicit HTML setup
+navigation, same-origin links, SSE/no-Accept compatibility and Origin rejection.
+It checks anonymous discovery instructions and anonymous business-tool rejection,
+and that hosted/self-host instructions share the canonical public guide. These are
+local mocked checks, not live registration, credential entry, receiver subscription,
+paid provisioning or message acceptance. Validate those only with explicit authorization.
