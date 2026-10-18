@@ -337,12 +337,13 @@ test('Telegram transport exposes only sanitized definitive versus ambiguous outc
 
 
 const profileRpc=(app,method,params={},headers={})=>httpRequest(app,'/mcp','POST',JSON.stringify({jsonrpc:'2.0',id:1,method,params}),headers);
-const profileTokens={dot:'mcp_at_dot-synthetic-token-0001',bot:'mcp_at_bot-synthetic-token-0001',webhook:'mcp_at_web-synthetic-token-0001'};
+const profileTokens={dot:'mcp_at_dot-synthetic-token-0001',bot:'mcp_at_bot-synthetic-token-0001',webhook:'mcp_at_web-synthetic-token-0001',muse:'mcp_at_muse-synthetic-token-0001'};
 async function profileFixture(){
  const f=fixture();
  await f.store.put('agent','agent_dot',{owner:INSTANCE_ID,agentId:'agent_dot',handle:'dot',displayName:'Dot',tokenHash:hash(profileTokens.dot)});
  await f.store.put('agent','agent_bot',{owner:INSTANCE_ID,agentId:'agent_bot',handle:'dev',displayName:'Dev',grokbotAgentName:'Synthetic Dev',tokenHash:hash(profileTokens.bot)});
  await f.store.put('agent','agent_webhook',{owner:INSTANCE_ID,agentId:'agent_webhook',handle:'helper',displayName:'Helper',tokenHash:hash(profileTokens.webhook)});
+ await f.store.put('agent','agent_muse',{owner:INSTANCE_ID,agentId:'agent_muse',handle:'synmuse',displayName:'Syn Muse',botType:'muse',tokenHash:hash(profileTokens.muse)});
  for(const [token,agentId] of [['oauth-dot','agent_dot'],['oauth-bot','agent_bot'],['oauth-fresh',null]]){
   await f.store.put('access',hash(token),{owner:INSTANCE_ID,sessionId:token,expires:Date.now()+100000,resource:f.app.origin+'/mcp',authVersion:hash(instanceKey)});
   if(agentId)await f.store.put('agent_session',token,{owner:INSTANCE_ID,agentId});
@@ -535,11 +536,17 @@ test('X-MCP-Bot-Type filters tools/list and must match the resolved agent on cal
  assert.equal(grok.length,11);assert(grok.includes('cursor_key_set'));assert(grok.includes('agent_token_rotate'));assert(!grok.includes('messages_inbox'));
  const dot=profileNames(await profileRpc(f.app,'tools/list',{},{...key,'x-mcp-bot-type':'dot'}));
  assert.equal(dot.length,11);assert(dot.includes('messages_inbox'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));
+ const muse=profileNames(await profileRpc(f.app,'tools/list',{},{...key,'x-mcp-bot-type':'muse'}));
+ assert.equal(muse.length,11);assert(muse.includes('messages_inbox'));assert(muse.includes('agent_token_rotate'));assert(!muse.includes('cursor_key_set'));
  assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{},{'x-mcp-bot-type':'grokbot'})),grok);
  const invalid=await profileRpc(f.app,'tools/list',{},{'x-mcp-bot-type':'claude'});
- assert.equal(invalid.statusCode,400);assert.match(invalid.body,/X-MCP-Bot-Type must be dot or grokbot/);
+ assert.equal(invalid.statusCode,400);assert.match(invalid.body,/X-MCP-Bot-Type must be dot, grokbot or muse/);
  const mismatch=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{agent_token:profileTokens.dot}},{...key,'x-mcp-bot-type':'grokbot'})).body);
  assert.equal(mismatch.error.data.code,'forbidden');assert.match(mismatch.error.message,/X-MCP-Bot-Type/i);
+ const museMismatch=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{agent_token:profileTokens.muse}},{...key,'x-mcp-bot-type':'grokbot'})).body);
+ assert.equal(museMismatch.error.data.code,'forbidden');assert.match(museMismatch.error.message,/X-MCP-Bot-Type/i);
+ const museWho=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{agent_token:profileTokens.muse}},{...key,'x-mcp-bot-type':'muse'})).body).result.structuredContent;
+ assert.equal(museWho.tool_profile,'muse');assert(museWho.available_tool_names.includes('messages_inbox'));
  const inbox=JSON.parse((await profileRpc(f.app,'tools/call',{name:'messages_inbox',arguments:{agent_token:profileTokens.bot}},{...key,'x-mcp-bot-type':'grokbot'})).body);
  assert.equal(inbox.error.data.code,'forbidden');
  const who=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{agent_token:profileTokens.bot}},{...key,'x-mcp-bot-type':'grokbot'})).body).result.structuredContent;
