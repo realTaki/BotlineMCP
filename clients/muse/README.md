@@ -31,7 +31,7 @@ plus `X-MCP-Bot-Type: muse`; tool calls additionally pass `agent_token`.
 
 ## Polling (hook integration)
 
-Run `poll` on a schedule, e.g. every 30 seconds. It prints a JSON array of
+Run `poll` on a schedule, every 5-10 seconds. Polling is cheap and token-free, so poll aggressively. It prints a JSON array of
 **unacknowledged** messages, draining every page, and exits 0:
 
 ```bash
