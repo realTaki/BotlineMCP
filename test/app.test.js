@@ -50,7 +50,7 @@ test('instance authentication requires a Bearer credential and rejects legacy ag
  const f=fixture();assert.equal(f.app.instanceKeyHash,hash(instanceKey));
  const rpc=JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'agent_whoami',arguments:{}}});
  const accepted=await httpRequest(f.app,'/mcp','POST',rpc,{authorization:'Bearer '+instanceKey});
- assert.equal(accepted.statusCode,200);assert.deepEqual(JSON.parse(accepted.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.21',tool_profile:'bootstrap',available_tool_names:published});
+ assert.equal(accepted.statusCode,200);assert.deepEqual(JSON.parse(accepted.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
  for(const authorization of [undefined,instanceKey,'Basic '+instanceKey,'Bearer ','Bearer wrong',[instanceKey]])assert.equal((await httpRequest(f.app,'/mcp','POST',rpc,{authorization})).statusCode,401);
  const retired=new App({store:f.store,key,origin:f.app.origin,instanceKey,agents:[{id:'old-agent',tokenHash:hash('old-key')}]});
  assert.equal((await httpRequest(retired,'/mcp','POST',rpc,{authorization:'Bearer old-key'})).statusCode,401);
@@ -140,7 +140,7 @@ test('instance OAuth session shares authority; key rotation revokes access and r
  assert.equal(approved.statusCode,303);
  const code=new URL(approved.headers.Location).searchParams.get('code');
  const tokens=JSON.parse((await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:p.client_id,redirect_uri:p.redirect_uri,resource:p.resource,code,code_verifier:verifier,grant_type:'authorization_code'}).toString())).body);
- assert.deepEqual(JSON.parse((await mcp(f.app,tokens.access_token,'agent_whoami')).body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.21',tool_profile:'bootstrap',available_tool_names:published});
+ assert.deepEqual(JSON.parse((await mcp(f.app,tokens.access_token,'agent_whoami')).body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
  f.app.instanceKeyHash=hash('replacement-instance-key');
  assert.equal((await mcp(f.app,tokens.access_token,'bot_list')).statusCode,401);
  assert.equal((await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:p.client_id,resource:p.resource,grant_type:'refresh_token',refresh_token:tokens.refresh_token}).toString())).statusCode,401);
@@ -181,7 +181,7 @@ test('discovery documents agent-first recovery, minimal friction and retired for
 test('single instance key shares authority; retired invitations and old agent credentials rejected',async()=>{
  const f=fixture();
  const who=JSON.parse((await mcp(f.app,instanceKey,'agent_whoami')).body).result.structuredContent;
- assert.deepEqual(who,{registered:false,agent_id:null,server_version:'0.6.21',tool_profile:'bootstrap',available_tool_names:published});
+ assert.deepEqual(who,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
  await f.app.bind(INSTANCE_ID,bind);
  assert.equal((await f.app.invoke(INSTANCE_ID,'bot_list')).bots.length,1);
  assert.equal((await mcp(f.app,'wrong-key','bot_list')).statusCode,401);
@@ -197,7 +197,7 @@ test('legacy instance OAuth grants remain valid while retired agent grants are r
  const legacyAccess='legacy-access',legacyRefresh='legacy-refresh',expires=Date.now()+60000;
  await f.store.put('access',hash(legacyAccess),{owner:INSTANCE_ID,resource,expires});
  await f.store.put('refresh',hash(legacyRefresh),{owner:INSTANCE_ID,client_id:clientId,resource,expires});
- const who=await mcp(f.app,legacyAccess,'agent_whoami');assert.equal(who.statusCode,200);assert.deepEqual(JSON.parse(who.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.21',tool_profile:'bootstrap',available_tool_names:published});
+ const who=await mcp(f.app,legacyAccess,'agent_whoami');assert.equal(who.statusCode,200);assert.deepEqual(JSON.parse(who.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
  const refreshed=await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:clientId,resource,refresh_token:legacyRefresh,grant_type:'refresh_token'}).toString());
  assert.equal(refreshed.statusCode,200);const tokens=JSON.parse(refreshed.body);assert(tokens.access_token);
  assert.equal((await f.store.get('access',hash(tokens.access_token))).authVersion,hash(instanceKey));
@@ -426,14 +426,21 @@ test('existing onboarding guide consistently distinguishes dot inbox from direct
  assert.match(description,/Dot uses exactly handle dot/);assert.match(description,/Grok Bot destinations must not subscribe/);assert.match(description,/ACK only processed messages/);
  assert(!tools.some(t=>/^(help|guide)$/.test(t.name)));
  const {readFile}=await import('node:fs/promises');
- for(const path of ['../README.md','../docs/dms.md']){const text=await readFile(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(text,/Choose a unique\s+handle on consent/);assert.match(text,/inbox.ready/);assert.match(text,/messages_ack/);assert.match(text,/Grok Bot\s+destinations do not subscribe/);assert.match(text,/agent_token/);assert.match(text,/thirteen tools/);assert.match(text,/\[handle\.type@botline\]:/);assert.doesNotMatch(text,/\[MCP\] handle@platform:/);}
+ const dms=await readFile(new URL('../docs/dms.md',import.meta.url),'utf8');
+ assert.doesNotMatch(dms,/Choose a unique\s+handle on consent/);assert.match(dms,/inbox.ready/);assert.match(dms,/messages_ack/);assert.match(dms,/Grok Bot\s+destinations do not subscribe/);assert.match(dms,/agent_token/);assert.match(dms,/thirteen tools/);assert.match(dms,/\[handle\.type@botline\]:/);assert.doesNotMatch(dms,/\[MCP\] handle@platform:/);
+ const readme=await readFile(new URL('../README.md',import.meta.url),'utf8');
+ assert.match(readme,/Instant messaging for AI agents/);assert.match(readme,/https:\/\/botlinemcp\.vercel\.app\/mcp/);assert.match(readme,/public\/setup\.md/);assert.doesNotMatch(readme,/\b(phone|mailbox)\b/i);
+ const landing=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+ assert.match(landing,/Instant messaging for AI agents/);assert.match(landing,/Copy setup guide for your agent/);assert.doesNotMatch(landing,/🕊|agent_token|Streamable HTTP|\[handle\.type@botline\]/);
+ const guide=await readFile(new URL('../public/setup.md',import.meta.url),'utf8');
+ assert.match(guide,/https:\/\/botlinemcp\.vercel\.app\/mcp/);assert.match(guide,/agent_register/);assert.match(guide,/cursor_key_set/);assert.match(guide,/telegram_bot_bind/);assert.doesNotMatch(guide,/\b(phone|mailbox)\b/i);
 });
 
 test('whoami diagnostics use the same tool selection as authenticated discovery without revealing secrets',async()=>{
  const f=await profileFixture();
  for(const [headers,profile] of [[{authorization:'Bearer oauth-dot'},'dot'],[{authorization:'Bearer oauth-bot'},'bot'],[{authorization:'Bearer oauth-fresh'},'bootstrap'],[{authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'},'bot']]){
   const before=structuredClone([...f.store.data]);const result=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{}},headers)).body).result.structuredContent;
-  assert.equal(result.server_version,'0.6.21');assert.equal(result.tool_profile,profile);
+  assert.equal(result.server_version,'0.6.22');assert.equal(result.tool_profile,profile);
   assert.deepEqual(result.available_tool_names,profileNames(await profileRpc(f.app,'tools/list',{},headers)));
   assert.deepEqual([...f.store.data],before);assert(!JSON.stringify(result).includes(instanceKey));assert(!JSON.stringify(result).includes('oauth-dot'));
   assert.equal(result.agent_token,undefined);assert.equal(result.tokenHash,undefined);
@@ -642,7 +649,7 @@ test('modern production discovery and fresh OAuth tools use stateless envelopes 
  }
  assert.equal((await request('tools/list',{}, {origin:f.app.origin})).statusCode,200);
  for(const method of ['initialize','ping']){const rejected=await request(method);assert.equal(rejected.statusCode,404);assert.equal(rejected.value.error.code,-32601);}
- const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.21');
+ const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.22');
  const auth={authorization:'Bearer oauth-fresh'};
  const fresh=await request('tools/list',{},auth);assert.equal(fresh.value.result.tools.length,13);assert.equal(fresh.value.result.resultType,'complete');
  const who=await request('tools/call',{name:'agent_whoami',arguments:{}},auth);assert.equal(who.value.result.structuredContent.registered,false);assert.equal(who.value.result.resultType,'complete');
@@ -687,7 +694,7 @@ test('Streamable HTTP GET is an SSE stream and POST honors Accept event-stream',
  assert.equal(notice.statusCode,202);assert.equal(notice.body??'','');
  const who=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{...accept,'mcp-protocol-version':'2025-06-18'});
  assert.equal(who.statusCode,200);assert.equal(who.headers['Content-Type'],'text/event-stream');
- const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.21');
+ const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.22');
  const jsonWho=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{authorization:'Bearer '+instanceKey,'mcp-protocol-version':'2025-06-18','accept':'application/json'});
  assert.equal(jsonWho.headers['Content-Type'],'application/json');assert.equal(JSON.parse(jsonWho.body).result.structuredContent.registered,false);
 });
@@ -699,6 +706,56 @@ test('production entry serves Streamable HTTP GET without waiting on the databas
  const res={headers:{},setHeader(k,v){this.headers[k]=v;},write(body){this.body=(this.body??'')+body;return true;},end(body){if(body)this.write(body);this.writableEnded=true;},flushHeaders(){}};
  await entry(req,res);
  assert.equal(res.statusCode,200);assert.equal(res.headers['Content-Type'],'text/event-stream');assert.match(res.body,/^: connected\n\nretry: 15000\n\n$/);assert.equal(res.writableEnded,undefined);assert.equal(starts,0);
+});
+
+test('GET / is the landing page and GET /mcp stays Streamable HTTP',async()=>{
+ const f=fixture();
+ const home=await httpRequest(f.app,'/','GET');
+ assert.equal(home.statusCode,200);
+ assert.match(home.headers['Content-Type'],/^text\/html\b/);
+ assert.match(home.body,/Instant messaging for AI agents/);
+ assert.match(home.body,/Copy setup guide for your agent/);
+ assert.match(home.body,/src="\/home\.js"/);
+ assert.doesNotMatch(home.body,/🕊|agent_token|Streamable HTTP|\[handle\.type@botline\]/);
+ const script=await httpRequest(f.app,'/home.js','GET');
+ assert.equal(script.statusCode,200);
+ assert.match(script.body,/fetch\('\/setup\.md'\)/);
+ const guide=await httpRequest(f.app,'/setup.md','GET');
+ assert.equal(guide.statusCode,200);
+ assert.match(guide.headers['Content-Type'],/^text\/markdown\b/);
+ assert.match(guide.body,/https:\/\/botlinemcp\.vercel\.app\/mcp/);
+ assert.match(guide.body,/MCP_API_KEY/);
+ assert.match(guide.body,/DATABASE_URL/);
+ assert.match(guide.body,/POSTGRES_URL/);
+ assert.match(guide.body,/VERCEL_PROJECT_PRODUCTION_URL/);
+ assert.match(guide.body,/agent_register/);
+ assert.match(guide.body,/cursor_key_set/);
+ assert.match(guide.body,/telegram_bot_bind/);
+ assert.match(guide.body,/messages_send/);
+ assert.doesNotMatch(guide.body,/\b(phone|mailbox)\b/i);
+ const mcp=await rawMcp(f.app,'GET','',{accept:'text/event-stream'});
+ assert.equal(mcp.statusCode,200);
+ assert.equal(mcp.headers['Content-Type'],'text/event-stream');
+ assert.match(mcp.body,/^: connected\n\nretry: 15000\n\n$/);
+ assert.doesNotMatch(mcp.body,/<!doctype html/i);
+ const initialized=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'sdk',version:'1'}}}),{'accept':'application/json, text/event-stream'});
+ assert.equal(initialized.statusCode,200);
+ assert.equal(initialized.headers['Content-Type'],'text/event-stream');
+ assert.equal(sseJson(initialized.body).result.protocolVersion,'2025-06-18');
+ assert.doesNotMatch(initialized.body,/Instant messaging for AI agents/);
+});
+
+test('production entry serves GET / without the database and keeps GET /mcp on SSE',async()=>{
+ const {createEntrypoint}=await import('../api/index.js');
+ let starts=0;const entry=createEntrypoint(()=>{starts++;throw new Error('database must not start for landing');},()=>'https://mcp.example.com');
+ const homeReq=Readable.from([]);Object.assign(homeReq,{url:'/',method:'GET',headers:{}});
+ const homeRes={headers:{},statusCode:200,setHeader(k,v){this.headers[k]=v;},end(body){this.body=body??'';}};
+ await entry(homeReq,homeRes);
+ assert.equal(homeRes.statusCode,200);assert.match(homeRes.headers['Content-Type'],/^text\/html\b/);assert.match(homeRes.body,/Instant messaging for AI agents/);assert.equal(starts,0);
+ const mcpReq=Readable.from([]);Object.assign(mcpReq,{url:'/mcp',method:'GET',headers:{accept:'text/event-stream'}});
+ const mcpRes={headers:{},setHeader(k,v){this.headers[k]=v;},write(body){this.body=(this.body??'')+body;return true;},end(body){if(body)this.write(body);this.writableEnded=true;},flushHeaders(){}};
+ await entry(mcpReq,mcpRes);
+ assert.equal(mcpRes.statusCode,200);assert.equal(mcpRes.headers['Content-Type'],'text/event-stream');assert.match(mcpRes.body,/^: connected\n\nretry: 15000\n\n$/);assert.equal(starts,0);
 });
 
 test('direct development handler enforces the same modern protocol contract',async()=>{
