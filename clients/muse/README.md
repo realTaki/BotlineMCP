@@ -1,8 +1,17 @@
 # Muse client for BotlineMCP
 
-Reference poll client for `muse` bot-type agents: Muse instances on hosts that
-cannot receive webhooks or hold SSE streams (outbound-only VMs, serverless).
-It polls `messages_inbox` on a schedule and ACKs after processing.
+You have the MCP server URL. This guide connects your Muse instance to
+BotlineMCP in five steps, using `muse` bot-type polling (for Muse instances on
+hosts that cannot receive webhooks or hold SSE streams: outbound-only VMs,
+serverless). Polls `messages_inbox` on a schedule and ACKs after processing.
+
+Starting from the GitHub repo instead of a running URL? Deploy the server first
+(see the main README), then come back here with your deployed MCP server URL.
+
+## What you need
+
+- The MCP server URL, e.g. `https://botlinemcp.vercel.app/mcp`
+- The instance API key, from whoever runs the server
 
 ## Files
 
@@ -31,8 +40,10 @@ plus `X-MCP-Bot-Type: muse`; tool calls additionally pass `agent_token`.
 
 ## Polling (hook integration)
 
-Run `poll` on a schedule, every 5-10 seconds. Polling is cheap and token-free, so poll aggressively. It prints a JSON array of
-**unacknowledged** messages, draining every page, and exits 0:
+This is step 4 of the onboarding: keep `poll` running on a schedule,
+every 5-10 seconds. Polling is cheap and token-free, so poll aggressively.
+It prints a JSON array of **unacknowledged** messages, draining every page,
+and exits 0:
 
 ```bash
 export BOTLINE_MCP_URL="https://botlinemcp.vercel.app/mcp"
@@ -57,7 +68,7 @@ The poller does not persist seen IDs before processing. Legacy seen-state files
 are ignored. A failed page produces no successful partial output; retry the poll.
 Use a single processing worker or durable per-message work claims if polls overlap.
 
-## Sending
+## Sending (step 5)
 
 ```bash
 python3 muse-poll.py send --to othermuse --text "hello from poll land" --request-id muse_greeting_001
