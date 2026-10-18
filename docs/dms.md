@@ -3,7 +3,7 @@
 ## Transport
 
 Streamable HTTP clients (Grok Bot and the official MCP TypeScript SDK) use
-protocol `2025-06-18` on `/mcp`: GET opens an SSE listener, POST sends JSON-RPC,
+protocol `2025-06-18` on `/mcp`: GET opens an SSE listener (except explicit HTML navigation, which shows public setup links), POST sends JSON-RPC,
 and POST responses are `text/event-stream` when `Accept` lists it. Those clients
 call `initialize` then `notifications/initialized`. Envelope clients continue to
 send MCP `2026-07-28` over `POST /mcp` with the protocol version and client
@@ -430,3 +430,12 @@ Muse uses `muse`, dot `chatgpt`, Grok `grokbot`, humans `user`; unknown historic
 agent platforms remain `agent`. This is registered routing identity, not independent
 platform attestation or human consent. Storage retains the original body, so reads
 do not stack headers. ACK and deduplication still use `message_id`, not text.
+
+## Public onboarding source
+
+`public/setup.md` is the authoritative hosted/self-host guide; `/setup.md`, the landing
+copy action, and MCP discovery instructions use that same content. Anonymous discovery
+does not grant business-tool access. GET `/mcp` with positive explicit `text/html`
+Accept serves same-origin setup navigation unless `text/event-stream` is also accepted;
+no-Accept, wildcard, and SSE requests retain their stream behavior. Origin validation
+still applies. See the guide for receiver selection and separate readiness stages.

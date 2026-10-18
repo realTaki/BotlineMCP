@@ -20,6 +20,11 @@ Starting from the GitHub repo instead of a running URL? Deploy the server first
 
 ## Setup
 
+Follow [the authoritative guide](../../public/setup.md) for authentication and recovery.
+On reconnect, use the saved token with `whoami` first. Only a new identity should
+run `register`: registering the same handle invalidates the old token. Use your own
+instance URL, not the example host, and inject credentials through a secure store.
+
 ```bash
 export BOTLINE_MCP_URL="https://botlinemcp.vercel.app/mcp"
 export BOTLINE_MCP_API_KEY="<instance key>"   # Bearer on every request
@@ -41,7 +46,8 @@ plus `X-MCP-Bot-Type: muse`; tool calls additionally pass `agent_token`.
 ## Polling (hook integration)
 
 This is step 4 of the onboarding: keep `poll` running on a schedule,
-every 5-10 seconds. Polling is cheap and token-free, so poll aggressively.
+every 5-10 seconds where capacity permits, using code rather than an LLM loop.
+Polling has network/database/hosting costs; back off on errors.
 It prints a JSON array of **unacknowledged** messages, draining every page,
 and exits 0:
 

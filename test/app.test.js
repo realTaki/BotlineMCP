@@ -175,7 +175,7 @@ test('bind returns identity only; unregistered private DMs are denied until the 
 });
 test('discovery documents agent-first recovery, minimal friction and retired forms',async()=>{
  const app=new App({});const discover=await app.rpc(null,'server/discover'),init=discover;
- assert.match(discover.serverInfo.description,/agent-first/);assert.match(init.instructions,/same instance key/);
+ assert.match(discover.serverInfo.description,/agent-first/);assert.match(init.instructions,/shared instance authority/);
  const listed=await app.rpc(null,'tools/list');assert.deepEqual(listed.tools.map(t=>t.name),published);assert(!listed.tools.some(t=>t.name==='bot_begin_binding'));assert(!listed.tools.some(t=>t.name==='telegram_whitelist_update'));assert.match(init.instructions,/Minimize user friction/);
 });
 test('single instance key shares authority; retired invitations and old agent credentials rejected',async()=>{
@@ -223,7 +223,7 @@ test('discovery separates direct agent access and authenticated dot Settings fal
  assert.match(instructions,/X-MCP-Agent-ID/);
  assert.match(instructions,/X-MCP-Bot-Type: grokbot/);
  assert.match(instructions,/Grok Bot does not use OAuth/);
- assert.match(instructions,/stores its own agent_token in memory/);
+ assert.match(instructions,/stores its own agent_token in a secure persistent credential store/);
  assert.match(instructions,/Never post agent_token in chats/);
  assert.match(instructions,/agent_token_rotate/);
  assert.match(instructions,/Do not create an agent.notification inbox subscription/);
@@ -416,7 +416,7 @@ test('existing onboarding guide consistently distinguishes dot inbox from direct
  assert.match(instructions,/inbox.ready wake hints: call messages_inbox, drain pages, deduplicate by message_id, and call messages_ack only after processing/);
  assert.match(instructions,/Grok Bot destinations receive direct Cursor messages and must not create an inbox subscription/);
  assert.match(instructions,/Other webhook agents also maintain one subscription/);
- assert.match(instructions,/visible sender handle and verified type from authenticated routing metadata/);
+ assert.match(instructions,/visible sender handle and registered platform from routing/);
  assert.match(instructions,/one BotlineMCP sender header \(\[handle\.type@botline\]:\)/);assert.match(instructions,/does not establish owner authorship/);
  assert.match(instructions,/Handle encoding prevents "\." or "@" from forging another identity/);
  assert.doesNotMatch(instructions,/\[MCP\] handle@platform:/);
@@ -434,7 +434,7 @@ test('existing onboarding guide consistently distinguishes dot inbox from direct
  const landing=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
  assert.match(landing,/Instant messaging for AI agents/);assert.match(landing,/Copy setup guide for your agent/);assert.doesNotMatch(landing,/🕊|agent_token|Streamable HTTP|\[handle\.type@botline\]/);
  const guide=await readFile(new URL('../public/setup.md',import.meta.url),'utf8');
- assert.match(guide,/https:\/\/botlinemcp\.vercel\.app\/mcp/);assert.match(guide,/agent_register/);assert.match(guide,/cursor_key_set/);assert.match(guide,/telegram_bot_bind/);assert.doesNotMatch(guide,/\b(phone|mailbox)\b/i);
+ assert.match(guide,/same origin/);assert.match(guide,/agent_register/);assert.match(guide,/cursor_key_set/);assert.match(guide,/telegram_bot_bind/);assert.doesNotMatch(guide,/\b(phone|mailbox)\b/i);
 });
 
 test('whoami diagnostics use the same tool selection as authenticated discovery without revealing secrets',async()=>{
@@ -730,7 +730,7 @@ test('GET / is the landing page and GET /mcp stays Streamable HTTP',async()=>{
  const guide=await httpRequest(f.app,'/setup.md','GET');
  assert.equal(guide.statusCode,200);
  assert.match(guide.headers['Content-Type'],/^text\/markdown\b/);
- assert.match(guide.body,/https:\/\/botlinemcp\.vercel\.app\/mcp/);
+ assert.match(guide.body,/same origin/);
  assert.match(guide.body,/MCP_API_KEY/);
  assert.match(guide.body,/DATABASE_URL/);
  assert.match(guide.body,/POSTGRES_URL/);
