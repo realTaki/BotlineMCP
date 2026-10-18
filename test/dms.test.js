@@ -5,6 +5,7 @@ import {Store} from '../src/store.js';
 import {Readable} from 'node:stream';
 import {App,handler} from '../src/app.js';
 import {DotInbox,DOT_INBOX_POLICY} from '../src/dot-inbox.js';
+import {MuseInbox,MUSE_INBOX_POLICY,isMuseAgent} from '../src/muse-inbox.js';
 import {Dms,DM_POLICY} from '../src/dms.js';
 import {registerAgent} from '../src/agents.js';
 import {configureHuman} from '../src/telegram-owner.js';
@@ -22,7 +23,7 @@ class MemoryStore {
  async telegramReactionSnapshot(botId,owner,agentId){return {bot:await this.get('bot',botId),route:await this.get('group_bot',botId),agent:await this.get('agent',agentId),humans:await this.list('human',owner)};}
  async withBotLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;try{return await fn(this);}finally{release();}}
  async reserveDeniedReply(){return true;}
- async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
+ async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox','muse_inbox'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
 }
 async function fixture(store=new MemoryStore()){
  const events=[],telegram=[];const app=new App({store,instanceKey:'x'.repeat(64),key:Buffer.alloc(32,7).toString('base64'),origin:'https://mcp.example',post:async(url,h,body)=>{const e=JSON.parse(body);if(e.type!=='verification')events.push({url,event:e});return {status:200,body:JSON.stringify({challenge:e.challenge})};},telegram:async(t,method,args)=>{telegram.push({method,args});return {message_id:9};}});
@@ -310,4 +311,67 @@ test('Telegram webhook returns while waitUntil holds inbound reaction work',asyn
  let settled=false;Promise.all(held).then(()=>settled=true);await Promise.resolve();assert.equal(settled,false);
  release();await Promise.all(held);await waitInboundReactions();
  assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received]);
+});
+async function museFixture(store){
+ const f=await fixture(store);
+ const m1=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'museone',display_name:'Muse One'},{botType:'muse'});
+ const m2=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'musetwo',display_name:'Muse Two'},{botType:'muse'});
+ return {...f,
+  museA:{owner,agentId:m1.agent_id,authType:'api_key'},
+  museB:{owner,agentId:m2.agent_id,authType:'api_key'},
+  museTokenA:m1.agent_token,museTokenB:m2.agent_token,
+  museInbox:new MuseInbox(f.app)};
+}
+test('muse agents poll an isolated inbox; sends skip webhook delivery; ACK is idempotent',async()=>{
+ const f=await museFixture();
+ assert(isMuseAgent(await f.app.store.get('agent',f.museA.agentId)));
+ // registration guards: dot handle and grokbot destination are rejected for muse
+ await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'dot'},{botType:'muse'}),/reserved/);
+ await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'musebad',grokbot_agent_name:'Some Bot'},{botType:'muse'}),/grokbot_agent_name/);
+ const r1=await f.g.send(f.museA,{to:'musetwo',text:'hello muse',request_id:'muse-send-1'});
+ const r2=await f.g.send(f.a,{to:'museone',text:'hello from webhook agent',request_id:'muse-send-2'});
+ assert.equal(r1.to,'musetwo');assert.equal(r2.to,'museone');
+ assert.equal(f.events.length,0); // no webhook wakes for muse
+ assert.equal((await f.store.list('group_delivery')).length,0); // not in webhook queue
+ assert.equal((await f.store.list('muse_inbox')).length,2);
+ // inbox routing through Dms.invoke picks MuseInbox for muse callers
+ const viaInvoke=await f.app.invoke(owner,'messages_inbox',{},f.museB);
+ assert.equal(viaInvoke.messages.length,1);assert.equal(viaInvoke.messages[0].text,'hello muse');
+ assert.equal(viaInvoke.messages[0].sender.handle,'museone');
+ // pagination
+ const page1=await f.museInbox.list(f.museB,{limit:1});
+ assert.equal(page1.messages.length,1);
+ // isolation: A cannot read B's inbox; webhook agent cannot use muse inbox
+ assert.deepEqual((await f.museInbox.list(f.museA)).messages.map(m=>m.text),['hello from webhook agent']);
+ await assert.rejects(f.museInbox.list(f.a),/muse agents/);
+ await assert.rejects(f.museInbox.ack(f.a,{message_ids:[r1.message_id]}),/muse agents/);
+ // ACK is idempotent and scoped
+ const ackIds={message_ids:[r1.message_id]};
+ assert.deepEqual(await f.museInbox.ack(f.museB,ackIds),await f.museInbox.ack(f.museB,ackIds));
+ assert.deepEqual((await f.museInbox.list(f.museB)).messages,[]);
+ assert.equal((await f.museInbox.list(f.museA)).messages.length,1); // A's mail untouched
+ // idempotent resend does not duplicate
+ assert.equal((await f.g.send(f.museA,{to:'musetwo',text:'hello muse',request_id:'muse-send-1'})).message_id,r1.message_id);
+ // dot line is unaffected: dot inbox still works alongside muse
+ const dot=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'dot'});
+ const dotP={owner,agentId:dot.agent_id,authType:'api_key'};
+ await f.g.send(f.museA,{to:'dot',text:'muse to dot',request_id:'muse-send-3'});
+ assert.equal((await new DotInbox(f.app).list(dotP)).messages.length,1);
+ assert.equal((await f.museInbox.list(f.museA)).messages.length,1);
+});
+test('muse re-register keeps bot type; conflicting type is rejected',async()=>{
+ const f=await fixture();
+ const first=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'retype'},{botType:'muse'});
+ assert(isMuseAgent(await f.app.store.get('agent',first.agent_id)));
+ const second=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'retype'},{botType:'muse'});
+ assert.equal(second.agent_id,first.agent_id);assert.notEqual(second.agent_token,first.agent_token);
+ assert(isMuseAgent(await f.app.store.get('agent',second.agent_id)));
+ // re-register without the header keeps the muse marker
+ const third=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'retype'});
+ assert(isMuseAgent(await f.app.store.get('agent',third.agent_id)));
+ // a grokbot-typed handle cannot be silently flipped is enforced at call time;
+ // explicit conflicting re-register is rejected
+ const g=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'flipper'},{botType:'muse'});
+ await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'flipper'},{botType:'grokbot'}),/different bot type/);
+ assert(isMuseAgent(await f.app.store.get('agent',g.agent_id)));
 });
