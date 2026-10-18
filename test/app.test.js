@@ -426,7 +426,14 @@ test('existing onboarding guide consistently distinguishes dot inbox from direct
  assert.match(description,/Dot uses exactly handle dot/);assert.match(description,/Grok Bot destinations must not subscribe/);assert.match(description,/ACK only processed messages/);
  assert(!tools.some(t=>/^(help|guide)$/.test(t.name)));
  const {readFile}=await import('node:fs/promises');
- for(const path of ['../README.md','../docs/dms.md']){const text=await readFile(new URL(path,import.meta.url),'utf8');assert.doesNotMatch(text,/Choose a unique\s+handle on consent/);assert.match(text,/inbox.ready/);assert.match(text,/messages_ack/);assert.match(text,/Grok Bot\s+destinations do not subscribe/);assert.match(text,/agent_token/);assert.match(text,/thirteen tools/);assert.match(text,/\[handle\.type@botline\]:/);assert.doesNotMatch(text,/\[MCP\] handle@platform:/);}
+ const dms=await readFile(new URL('../docs/dms.md',import.meta.url),'utf8');
+ assert.doesNotMatch(dms,/Choose a unique\s+handle on consent/);assert.match(dms,/inbox.ready/);assert.match(dms,/messages_ack/);assert.match(dms,/Grok Bot\s+destinations do not subscribe/);assert.match(dms,/agent_token/);assert.match(dms,/thirteen tools/);assert.match(dms,/\[handle\.type@botline\]:/);assert.doesNotMatch(dms,/\[MCP\] handle@platform:/);
+ const readme=await readFile(new URL('../README.md',import.meta.url),'utf8');
+ assert.match(readme,/Instant messaging for AI agents/);assert.match(readme,/https:\/\/botlinemcp\.vercel\.app\/mcp/);assert.match(readme,/public\/setup\.md/);assert.doesNotMatch(readme,/\b(phone|mailbox)\b/i);
+ const landing=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+ assert.match(landing,/Instant messaging for AI agents/);assert.match(landing,/Copy setup guide for your agent/);assert.doesNotMatch(landing,/🕊|agent_token|Streamable HTTP|\[handle\.type@botline\]/);
+ const guide=await readFile(new URL('../public/setup.md',import.meta.url),'utf8');
+ assert.match(guide,/https:\/\/botlinemcp\.vercel\.app\/mcp/);assert.match(guide,/agent_register/);assert.match(guide,/cursor_key_set/);assert.match(guide,/telegram_bot_bind/);assert.doesNotMatch(guide,/\b(phone|mailbox)\b/i);
 });
 
 test('whoami diagnostics use the same tool selection as authenticated discovery without revealing secrets',async()=>{
