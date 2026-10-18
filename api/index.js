@@ -1,6 +1,7 @@
 import {prepareProtocol,instrumentProtocol,usesModernEnvelope,writeGetSse,writeMcpResponse,modernResult} from '../src/protocol.js';
 import {configuration} from '../src/config.js';
 import { App,handler,readBody } from '../src/app.js';
+import {tryLanding} from '../src/landing.js';
 import { Store } from '../src/store.js';
 export function createEntrypoint(createService=()=>{
  const config=configuration(process.env),store=new Store(config.databaseUrl);
@@ -9,6 +10,7 @@ export function createEntrypoint(createService=()=>{
  let serve, initialized;
  return async function(req,res){
  const path=req.url.split('?')[0];
+ if(tryLanding(req,res,path))return;
  if(path==='/mcp'){
   instrumentProtocol(req,res);
   if(req.headers.origin!==undefined&&req.headers.origin!==publicOrigin()){res.statusCode=403;res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');return res.end(JSON.stringify({error:'Origin mismatch'}));}
