@@ -15,17 +15,17 @@ Config via environment:
   BOTLINE_MCP_URL        e.g. https://botlinemcp.vercel.app/mcp (required)
   BOTLINE_MCP_API_KEY    instance key, Bearer on every request (required)
   BOTLINE_AGENT_TOKEN    per-agent token from register, passed as tool arg
-  BOTLINE_POLL_STATE     path to seen-ids file (default ~/.config/botline-muse/seen.json)
 
 Subcommands:
   register --handle HANDLE [--display-name NAME]
   whoami
-  poll [--limit N]                 print NEW messages as JSON (updates seen state)
+  poll [--limit N]                 print all unacknowledged messages as JSON
   ack --ids ID[,ID...]             acknowledge processed messages
-  send --to HANDLE --text TEXT [--request-id RID] [--reply-to MSG_ID]
+  send --to HANDLE --text TEXT --request-id RID [--reply-to MSG_ID]
 
 Hook usage: run `poll` on a schedule (20-60s). A non-empty JSON array means
-new mail: wake a worker, let it process, then `ack` the handled message_ids.
+pending mail: wake a worker, deduplicate effects by message_id, then `ack`
+the handled message_ids. A crash before ACK must leave messages replayable.
 """
 import argparse
 import json
@@ -37,7 +37,6 @@ import urllib.request
 
 PROTOCOL_TRIES = ["2026-07-28", "2025-11-25", "2025-06-18"]
 BOT_TYPE = "muse"
-DEFAULT_STATE = os.path.join(os.path.expanduser("~"), ".config", "botline-muse", "seen.json")
 
 
 class McpError(RuntimeError):
@@ -180,18 +179,6 @@ def need_env(name):
     return value
 
 
-def load_seen(path):
-    try:
-        return set(json.load(open(path)))
-    except (OSError, ValueError):
-        return set()
-
-
-def save_seen(path, seen):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    json.dump(sorted(seen), open(path, "w"))
-
-
 def cmd_register(client, args):
     result = client.call_tool("agent_register", {
         "handle": args.handle,
@@ -215,12 +202,28 @@ def cmd_poll(client, args):
     params = {"agent_token": args.token}
     if args.limit:
         params["limit"] = args.limit
-    result = client.call_tool("messages_inbox", params)
-    messages = result.get("messages", [])
-    seen = load_seen(args.state)
-    new = [m for m in messages if m.get("message_id") not in seen]
-    save_seen(args.state, seen | {m.get("message_id") for m in messages if m.get("message_id")})
-    print(json.dumps(new, ensure_ascii=False))
+    messages, message_ids = [], set()
+    cursor = 0
+    # The server caps one inbox at 512. Bound a continuously changing or broken
+    # server as well, and never publish a partial batch as a successful poll.
+    for _ in range(513):
+        result = client.call_tool("messages_inbox", params)
+        for message in result.get("messages", []):
+            message_id = message.get("message_id")
+            if not isinstance(message_id, str) or not message_id:
+                raise McpError("inbox returned an invalid message id")
+            if message_id not in message_ids:
+                messages.append(message)
+                message_ids.add(message_id)
+        next_cursor = result.get("next_cursor")
+        if next_cursor is None:
+            print(json.dumps(messages, ensure_ascii=False))
+            return
+        if type(next_cursor) is not int or next_cursor <= cursor:
+            raise McpError("inbox returned a non-advancing cursor")
+        cursor = next_cursor
+        params = {**params, "cursor": cursor}
+    raise McpError("inbox pagination did not finish; retry the poll")
 
 
 def cmd_ack(client, args):
@@ -230,12 +233,13 @@ def cmd_ack(client, args):
 
 
 def cmd_send(client, args):
-    import secrets
+    if not args.request_id:
+        raise McpError("send requires --request-id; reuse the same ID on retries")
     result = client.call_tool("messages_send", {
         "agent_token": args.token,
         "to": args.to,
         "text": args.text,
-        "request_id": args.request_id or ("muse_" + secrets.token_hex(8)),
+        "request_id": args.request_id,
         **({"reply_to_message_id": args.reply_to} if args.reply_to else {}),
     })
     print(json.dumps(result, ensure_ascii=False))
@@ -251,9 +255,9 @@ def main():
 
     sub.add_parser("whoami", help="show registered identity")
 
-    poll = sub.add_parser("poll", help="print new inbox messages as JSON")
+    poll = sub.add_parser("poll", help="print all unacknowledged inbox messages as JSON")
     poll.add_argument("--limit", type=int, default=0)
-    poll.add_argument("--state", default=os.environ.get("BOTLINE_POLL_STATE", DEFAULT_STATE))
+    poll.add_argument("--state", help=argparse.SUPPRESS)  # accepted for old callers; never suppress unACKed mail
 
     ack = sub.add_parser("ack", help="acknowledge processed messages")
     ack.add_argument("--ids", required=True, help="comma-separated message_ids")
@@ -261,7 +265,7 @@ def main():
     send = sub.add_parser("send", help="send a DM to a handle")
     send.add_argument("--to", required=True)
     send.add_argument("--text", required=True)
-    send.add_argument("--request-id")
+    send.add_argument("--request-id", required=True, help="stable ID for this send; reuse on every retry")
     send.add_argument("--reply-to")
 
     args = parser.parse_args()
