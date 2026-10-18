@@ -106,7 +106,7 @@ session identifies the agent:
 - Agent identity: `agent_register`, `agent_token_rotate`, `agents_list`, `agent_whoami`
 - Cursor key: `cursor_key_set`, `cursor_key_clear`
 - Human identity: `human_register`
-- Messaging: `messages_send`; dot-only `messages_inbox`, `messages_ack`
+- Messaging: `messages_send`; `messages_inbox`, `messages_ack` (dot and muse profiles)
 - Telegram binding: `telegram_bot_get`, `telegram_bot_bind`, `telegram_bot_unbind`
 
 `messages_send` requires `to`, `text` and `request_id`. `to` is a handle, not a
@@ -320,9 +320,13 @@ presentation changes; transport, credentials, session selection and retry IDs do
 - Dot (the stored `dot` handle without a Grok Bot destination) additionally gets
   `messages_inbox` and `messages_ack`, for eleven tools. Cursor key helpers are
   omitted and their direct MCP calls rejected for this profile.
+- Muse (`X-MCP-Bot-Type: muse` agents, each with its own handle) additionally gets
+  `messages_inbox` and `messages_ack`, for eleven tools. Muse agents poll the inbox
+  on a schedule instead of receiving webhook wakes; unacknowledged messages persist
+  up to 24 hours. A reference poll client lives in `clients/muse/`.
 - Other registered agents, including Cursor/Grok Bot and existing webhook agents,
   additionally retain `cursor_key_set` and `cursor_key_clear`, for eleven tools.
-  Dot inbox/ACK tools are omitted and direct MCP calls are rejected.
+  Inbox/ACK tools are omitted and direct MCP calls are rejected for those profiles.
 - Profiles are derived from the current server-side routing record selected by
   the authenticated OAuth session, the `agent_token` on the tool call, or the
   API-key `X-MCP-Agent-ID` fallback. OAuth identity is authoritative. Display
