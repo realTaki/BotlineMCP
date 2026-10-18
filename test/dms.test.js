@@ -18,6 +18,8 @@ class MemoryStore {
  async insert(k,id,v){if(this.data.has(k+':'+id))return false;await this.put(k,id,v);return true;}
  async delete(k,id){this.data.delete(k+':'+id);}
  async list(k,o){return [...this.data].filter(([id,v])=>id.startsWith(k+':')&&(!o||v.owner===o)).map(([id,v])=>({...structuredClone(v),id:id.slice(k.length+1)}));}
+ async listAgentInbox(o,a){return (await this.list('muse_inbox',o)).filter(d=>d.agentId===a);}
+ async withHeldConnectionLock(key,fn){return fn(this);}
  async lease(k,id){const v=await this.get(k,id);if(!v||v.leaseUntil>Date.now())return;v.leaseUntil=Date.now()+30000;await this.put(k,id,v);return v;}
  async withLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;const before=structuredClone(this.data);try{return await fn(this);}catch(e){this.data=before;throw e;}finally{release();}}
  async telegramReactionSnapshot(botId,owner,agentId){return {bot:await this.get('bot',botId),route:await this.get('group_bot',botId),agent:await this.get('agent',agentId),humans:await this.list('human',owner)};}
@@ -374,4 +376,84 @@ test('muse re-register keeps bot type; conflicting type is rejected',async()=>{
  const g=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'flipper'},{botType:'muse'});
  await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'flipper'},{botType:'grokbot'}),/different bot type/);
  assert(isMuseAgent(await f.app.store.get('agent',g.agent_id)));
+});
+
+test('Muse Telegram inbox rechecks human, binding generation and unbind cleanup',async()=>{
+ const f=await museFixture();const message=await boundBot(f,f.museA.agentId);
+ await f.app.receive('123','hook',{update_id:8001,message});
+ const first=await f.museInbox.list(f.museA);assert.equal(first.messages.length,1);
+ const [human]=await f.store.list('human',owner);
+ await f.store.put('human',human.id,{...human,telegram_user_id:'43'});
+ assert.deepEqual((await f.museInbox.list(f.museA)).messages,[]);
+ await assert.rejects(f.museInbox.ack(f.museA,{message_ids:[first.messages[0].message_id]}),/authorized/);
+ await f.store.put('human',human.id,human);
+ await f.store.put('group_bot','123',{owner,agentId:f.museA.agentId,bindingId:'generation-two'});
+ assert.deepEqual((await f.museInbox.list(f.museA)).messages,[]);
+ await f.store.put('group_bot','123',{owner,agentId:f.museA.agentId,bindingId:'generation-one'});
+ const peer=await f.g.send(f.museB,{to:'museone',text:'keep agent mail',request_id:'muse-keep-agent'});
+ await f.app.invoke(owner,'telegram_bot_unbind',{},f.museA);
+ assert.deepEqual((await f.museInbox.list(f.museA)).messages.map(m=>m.message_id),[peer.message_id]);
+ assert.equal((await f.store.listAgentInbox(owner,f.museA.agentId)).length,1);
+ // Even an old pending row restored from backup must not pass authorization.
+ assert.equal(await f.museInbox.allowed({owner,agentId:f.museA.agentId,expires:Date.now()+1000,event:{data:{sender:first.messages[0].sender,telegram:{bot_id:'123',chat_id:'42',binding_id:'generation-one'}}}}),false);
+ await waitInboundReactions();
+});
+
+test('Muse cannot claim an existing Grok or webhook handle or acquire a Grok destination without a header',async()=>{
+ const f=await museFixture();const old=await f.store.get('agent',f.a.agentId);
+ await f.store.put('agent',f.a.agentId,{...old,grokbotAgentName:'Synthetic Grok',grokbotSessionId:'synthetic-session'});
+ const before=await f.store.get('agent',f.a.agentId);
+ await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'alpha'},{botType:'muse'}),/different bot type/);
+ assert.deepEqual(await f.store.get('agent',f.a.agentId),before);
+ await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'bravo'},{botType:'muse'}),/different bot type/);
+ await assert.rejects(registerAgent(f.app,{owner,authType:'api_key'},{handle:'museone',grokbot_agent_name:'Synthetic Grok'}),/muse agents do not use/);
+ // Existing Muse profile is preserved on no-header reconnect.
+ const same=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'museone'});
+ assert.equal(same.bot_type,'muse');
+});
+
+test('actual SQL: >1000 aggregate Muse messages remain readable, ACKable and do not poison other sends',async()=>{
+ const db=new PGlite();let tail=Promise.resolve();
+ const query=async(...a)=>{const r=await db.query(...a);return {...r,rowCount:r.affectedRows??r.rows.length};};
+ const pool={query,connect:async()=>{const prev=tail;let release;tail=new Promise(r=>release=r);await prev;return {query,release};}};
+ const store=Object.create(Store.prototype);store.pool=pool;
+ try{
+  await store.initialize();const f=await museFixture(store),expires=Date.now()+100000;
+  const rows=[];
+  for(const agentId of [f.museA.agentId,f.museB.agentId]){
+   for(let i=1;i<=500;i++)rows.push({id:`seed_${agentId}_${i}`,value:{owner,agentId,sequence:i,expires,event:{eventId:`seed_${agentId}_${i}`,data:{message_id:`seed_${agentId}_${i}`,sender:{kind:'agent',id:f.a.agentId,handle:'alpha'},text:'synthetic'}}}});
+   await store.put('muse_seq',agentId,{owner,agentId,sequence:500});
+  }
+  await db.query("INSERT INTO mcp_records(kind,id,value) SELECT 'muse_inbox', x->>'id', x->'value' FROM jsonb_array_elements($1::jsonb) x",[JSON.stringify(rows)]);
+  const sent=await f.g.send(f.a,{to:'museone',text:'1001st',request_id:'sql-muse-over-1000'});
+  assert.equal(sent.status,'pending');assert.equal(sent.delivery.pending,1);
+  assert.equal((await store.listAgentInbox(owner,f.museA.agentId)).length,501);
+  assert.equal((await store.listAgentInbox(owner,f.museB.agentId)).length,500);
+  let cursor=0,count=0;do{const page=await f.museInbox.list(f.museA,{cursor,limit:100});count+=page.messages.length;cursor=page.next_cursor;}while(cursor!==null);
+  assert.equal(count,501);
+  assert.equal((await f.g.send(f.a,{to:'museone',text:'1001st',request_id:'sql-muse-over-1000'})).message_id,sent.message_id);
+  await f.museInbox.ack(f.museA,{message_ids:[sent.message_id]});
+  await f.museInbox.ack(f.museA,{message_ids:[sent.message_id]});
+  assert.equal((await store.listAgentInbox(owner,f.museA.agentId)).length,500);
+  // Refill above the generic scan ceiling, then exercise another delivery path.
+  await f.g.send(f.a,{to:'museone',text:'refill',request_id:'sql-muse-refill'});
+  await f.g.subscription(f.b,inbox());
+  assert.equal((await f.g.send(f.a,{to:'bravo',text:'unaffected',request_id:'sql-web-unaffected'})).status,'accepted');
+  assert.equal(f.events.at(-1).event.data.message.text,'unaffected');
+  const dot=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'dot'});
+  const dotP={owner,agentId:dot.agent_id,authType:'api_key'};
+  assert.equal((await f.g.send(f.a,{to:'dot',text:'dot still works',request_id:'sql-dot-unaffected'})).status,'pending');
+  assert.equal((await new DotInbox(f.app).list(dotP)).messages[0].text,'dot still works');
+ }finally{await db.close();}
+});
+
+test('Muse inbox preserves server confirmation metadata and rolls back failed enqueue',async()=>{
+ const f=await museFixture(),confirmation={type:'human_config_change',challenge_id:'hc_synthetic',expires_at:new Date(Date.now()+300000).toISOString()};
+ await f.g.send(f.a,{to:'museone',text:'show only to human',request_id:'muse-confirm-meta'},{confirmation});
+ assert.deepEqual((await f.museInbox.list(f.museA)).messages[0].confirmation,confirmation);
+ const insert=f.store.insert.bind(f.store);f.store.insert=async(kind,...args)=>{if(kind==='muse_inbox')throw Error('synthetic storage failure');return insert(kind,...args);};
+ await assert.rejects(f.g.send(f.a,{to:'musetwo',text:'rollback',request_id:'muse-failed-store'}),/storage failure/);
+ f.store.insert=insert;
+ assert.equal((await f.store.list('group_receipt')).length,1);
+ assert.equal((await f.store.listAgentInbox(owner,f.museB.agentId)).length,0);
 });

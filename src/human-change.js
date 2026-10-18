@@ -2,8 +2,9 @@ import {hash,nonce,requireThat,same} from './security.js';
 import {prepareHuman,humanKey} from './telegram-owner.js';
 import {Dms} from './dms.js';
 import {isDotInboxAgent} from './dot-inbox.js';
+import {isMuseAgent} from './muse-inbox.js';
 const TTL=300000,MAX_ATTEMPTS=5;
-const profile=a=>isDotInboxAgent(a)?'dot':a?.grokbotAgentName?'grokbot':null;
+const profile=a=>isMuseAgent(a)?'muse':isDotInboxAgent(a)?'dot':a?.grokbotAgentName?'grokbot':null;
 const state=h=>hash(JSON.stringify(h));
 const publicChallenge=c=>({status:'confirmation_required',challenge_id:c.id,expires_at:new Date(c.expires).toISOString(),delivery_status:c.delivery,action:'Ask the human to obtain the code shown by the other agent, then repeat the identical change with challenge_id and confirmation_code.'});
 // Instruction-dependent human handoff, not a separate authorization authority.
@@ -19,7 +20,11 @@ export async function registerHuman(app,p,args,{send=(principal,message,confirma
    return {human:existing?{...human,configured_at:existing.configured_at}:human};
   }
   const type=profile(actor);requireThat(type,'Requester has no supported cross-type confirmation route',409);
-  const peers=(await tx.list('agent',p.owner)).filter(a=>a.agentId!==p.agentId&&profile(a)&&profile(a)!==type);
+  const candidates=(await tx.list('agent',p.owner)).filter(a=>a.agentId!==p.agentId&&profile(a)&&profile(a)!==type);
+  // Preserve the existing dot/Grok pair when Muse joins. Muse prefers the
+  // unique dot verifier; only fall back when that established route is absent.
+  const preferred=candidates.filter(a=>profile(a)===(type==='dot'?'grokbot':'dot'));
+  const peers=preferred.length?preferred:candidates;
   requireThat(peers.length===1,'Exactly one existing different-type agent is required for confirmation',409);
   const verifier=peers[0],key=humanKey(p.owner,record.handle),now=Date.now();
   // Include the exact requested fields, requester credential generation, and both routes.

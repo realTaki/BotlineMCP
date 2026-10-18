@@ -52,6 +52,13 @@ export class Store {
     if(rows.length>1000) throw new Error('Store scan capacity exceeded; add pagination before scaling.');
     return rows.map(r=>({...r.value,id:r.id}));
   }
+  // Bound the scan per recipient, not per owner: multiple Muse inboxes may
+  // legitimately contain more than the generic list() ceiling in aggregate.
+  async listAgentInbox(owner,agentId) {
+    const rows=(await this.pool.query("SELECT id,value FROM mcp_records WHERE kind='muse_inbox' AND value->>'owner'=$1 AND value->>'agentId'=$2 ORDER BY (value->>'sequence')::bigint LIMIT 513",[owner,agentId])).rows;
+    if(rows.length>512)throw new Error('Muse inbox capacity exceeded');
+    return rows.map(r=>({...r.value,id:r.id}));
+  }
   async take(kind,id) { return (await this.pool.query('DELETE FROM mcp_records WHERE kind=$1 AND id=$2 RETURNING value',[kind,id])).rows[0]?.value; }
   async pruneDeniedReplies(now=Date.now()) {
     await this.pool.query(`DELETE FROM mcp_records WHERE (kind='denied_limit' OR kind='oauth_limit' OR (kind='update' AND value->>'denied'='true')) AND (value->>'expires')::bigint<=$1`,[now]);

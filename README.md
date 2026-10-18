@@ -63,3 +63,11 @@ Protocol details: [docs/dms.md](docs/dms.md). Acceptance vs live checks: [docs/a
 ## License
 
 MIT. See [LICENSE](LICENSE). Copyright (c) 2026 realTaki.
+
+### Muse polling clients
+
+See [the Muse poll client](clients/muse/README.md) for outbound-only hosts.
+Polling returns all unacknowledged messages across pages; consumers process
+idempotently and ACK afterward. Sending requires a stable explicit request ID.
+`relay.error` notices do not yet have durable delivery to poll-only Muse clients;
+check tool-call errors as well as the inbox.

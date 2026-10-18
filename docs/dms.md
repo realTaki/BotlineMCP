@@ -399,3 +399,21 @@ an agent automatically. Cursor text has no separate hidden metadata channel.
 Settings reports fixed nonsecret failure codes. A foreign webhook is rejected before any webhook change; disconnect it through its owning service with approval. Identity or webhook inspection failures also do not attempt a webhook write. Once a webhook write is attempted, a failed response or final persistence remains unconfirmed: inspect `telegram_bot_get` and do not automatically retry. Binding attempts still consume their one-use settings session. No credential, foreign webhook URL, or raw upstream error is displayed. Mock regression coverage is not a live Telegram binding acceptance test.
 
 Input rejection codes distinguish request/cookie/form structure, bot-token format, handle format, and unregistered handles without echoing submitted fields. An input rejection does not attempt a Telegram webhook change. The OAuth dot identity and Settings handle lookup share the same instance namespace and are covered with a parsed-form regression test.
+
+### Muse delivery and confirmation recovery
+
+Muse inbox reads are scoped to one recipient (512 pending messages each), so
+several Muse inboxes may exceed 1000 pending messages in aggregate. Telegram
+payloads recheck the current human mapping and binding generation on read/ACK;
+unbinding removes that bot's pending payloads. The poll client drains all pages
+and returns unacknowledged messages again after a crash. Consumers deduplicate
+completed effects by message_id and ACK only after processing. Sending requires
+an explicit stable request_id, reused for uncertain retries.
+
+For human changes, the existing dot/Grok confirmation pairing takes priority over
+new Muse peers. Muse prefers a unique dot verifier. If the preferred type is
+absent, the unique other supported type may verify; multiple candidates fail
+closed. Confirmation metadata is preserved in the Muse inbox. The recipient
+shows the code only to the human in its own native channel; it must never send
+the code automatically to another agent. This remains an instruction-dependent
+human handoff under shared instance authority, not independent authentication.
