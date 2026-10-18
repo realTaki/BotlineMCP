@@ -1,3 +1,4 @@
+import {messageText,senderPlatform} from './message-text.js';
 import {hash,requireThat} from './security.js';
 import {getAgent} from './agents.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
@@ -9,8 +10,8 @@ import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
 // current-human and binding-generation checks as the dot inbox.
 export const MUSE_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,maxPageSize:100};
 export const isMuseAgent=agent=>agent?.botType==='muse'||agent?.bot_type==='muse';
-const identity=p=>({kind:p.kind,id:p.id,...(p.handle?{handle:p.handle}:{})});
-const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:data.text,...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
+const identity=p=>({kind:p.kind,id:p.id,platform:senderPlatform(p),...(p.handle?{handle:p.handle}:{})});
+const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
 export class MuseInbox {
  constructor(app){this.app=app;this.store=app.store;}
  async actor(p,store=this.store){

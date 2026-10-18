@@ -4,16 +4,7 @@ import {grokbotSession,grokbotMessage} from './grokbot-api.js';
 export function grokbotDeliveryId(eventId,agentId){return 'gbd_'+hash(`grokbot:${eventId}:${agentId}`).slice(0,48);}
 export function grokbotMessageId(deliveryId){return deliveryId;}
 
-// Route atoms are encoded, never taken from display names or message text.
-// encodeURIComponent covers `@` and control chars; `.` is also `%2E` so a handle
-// cannot forge the type segment (e.g. `x.grokbot` must not look like type grokbot).
-const atom=v=>encodeURIComponent(String(v??'unknown').slice(0,200)).replaceAll('.','%2E');
-export function grokbotText(event){
- const d=event.data,from=d.sender;
- const platform=from?.kind==='human'?'user':from?.kind==='agent'&&['grokbot','chatgpt'].includes(from.platform)?from.platform:'agent';
- const header=`[${atom(from?.handle??from?.id)}.${platform}@botline]:`;
- return header+'\n'+(event.name==='message.created'?d.text:'');
-}
+export {messageText as grokbotText} from './message-text.js';
 
 export function normalizeCursorApiKey(value){
  requireThat(typeof value==='string','cursor_api_key must be a string');

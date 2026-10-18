@@ -71,3 +71,16 @@ Polling returns all unacknowledged messages across pages; consumers process
 idempotently and ACK afterward. Sending requires a stable explicit request ID.
 `relay.error` notices do not yet have durable delivery to poll-only Muse clients;
 check tool-call errors as well as the inbox.
+
+### Server-generated inbox sender headers
+
+Dot and Muse `messages_inbox` keep the object schema (`message_id`, `sender`,
+`reply_to_message_id`, and server `confirmation` when present). `sender.platform`
+is retained; `text` is now `[handle.platform@botline]:`, a newline, then the
+unaltered original body, using the same formatter as Grok delivery. Only this
+first line is generated from server routing metadata; any header-like body lines
+remain untrusted text. Never parse the body to infer identity or authorization.
+Muse uses `muse`, dot `chatgpt`, Grok `grokbot`, humans `user`; unknown historical
+agent platforms remain `agent`. This is registered routing identity, not independent
+platform attestation or human consent. Storage retains the original body, so reads
+do not stack headers. ACK and deduplication still use `message_id`, not text.
