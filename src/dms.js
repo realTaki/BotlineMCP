@@ -1,4 +1,5 @@
 import {DotInbox,isDotInboxAgent} from './dot-inbox.js';
+import {MuseInbox,isMuseAgent} from './muse-inbox.js';
 import {hash,nonce,requireThat,signingKey,signedHeaders,same} from './security.js';
 import {getAgent,listAgents,normalizeAgentHandle,callerTokenProperty} from './agents.js';
 import {grokbotText,grokbotDeliveryId} from './grokbot.js';
@@ -29,7 +30,7 @@ export class Dms {
  async enqueue(tx,owner,event,recipients){
   const pending=(await tx.list('group_delivery',owner)).filter(d=>d.state==='pending');
 
-  for(const agentId of recipients){if(isDotInboxAgent(await getAgent({store:tx},owner,agentId))){await new DotInbox(this.app).enqueue(tx,owner,event,agentId);continue;}requireThat(pending.length+1<=DM_POLICY.maxPending,'Pending delivery capacity reached; retry later',503);pending.push({});const id=hash(`${event.eventId}:${agentId}`);await tx.insert('group_delivery',id,{owner,agentId,event,state:'pending',attempts:0,next:0,leaseUntil:0,expires:Date.now()+DM_POLICY.payloadTtl});}
+  for(const agentId of recipients){const recipient=await getAgent({store:tx},owner,agentId);if(isDotInboxAgent(recipient)){await new DotInbox(this.app).enqueue(tx,owner,event,agentId);continue;}if(isMuseAgent(recipient)){await new MuseInbox(this.app).enqueue(tx,owner,event,agentId);continue;}requireThat(pending.length+1<=DM_POLICY.maxPending,'Pending delivery capacity reached; retry later',503);pending.push({});const id=hash(`${event.eventId}:${agentId}`);await tx.insert('group_delivery',id,{owner,agentId,event,state:'pending',attempts:0,next:0,leaseUntil:0,expires:Date.now()+DM_POLICY.payloadTtl});}
  }
  async resolvePeer(owner,raw){
   const handle=normalizeAgentHandle(raw);
@@ -66,11 +67,18 @@ export class Dms {
    if(confirmation)event.data.confirmation={...confirmation};
    await this.enqueue(tx,p.owner,event,[peer.id]);await tx.put('group_receipt',rid,{owner:p.owner,fingerprint,message_id:messageId,to:peer.handle,expires:Date.now()+DM_POLICY.receiptTtl});return {message_id:messageId};
   });
-  const dispatch=await this.dispatch(p.owner),pending=(await this.store.list('group_delivery',p.owner)).filter(d=>d.state==='pending'&&d.event.eventId===result.message_id).length+(await this.store.list('dot_inbox',p.owner)).filter(d=>d.event.eventId===result.message_id&&d.expires>Date.now()).length;
+  const dispatch=await this.dispatch(p.owner),pending=(await this.store.list('group_delivery',p.owner)).filter(d=>d.state==='pending'&&d.event.eventId===result.message_id).length+(await this.store.list('dot_inbox',p.owner)).filter(d=>d.event.eventId===result.message_id&&d.expires>Date.now()).length+(await this.store.list('muse_inbox',p.owner)).filter(d=>d.event.eventId===result.message_id&&d.expires>Date.now()).length;
   const failed=await this.store.withLock('dms:'+p.owner,async tx=>{const receipt=await tx.get('group_receipt',rid),failed=!!receipt.deliveryFailed||dispatch.failed_event_ids.includes(result.message_id);await tx.put('group_receipt',rid,{...receipt,deliveryFailed:failed});return failed;});
   return {to:peer.handle,message_id:result.message_id,status:failed?'delivery_failed':pending?'pending':'accepted',delivery:{pending,failed},...(dispatch.error_notifications.length?{errors:dispatch.error_notifications}:{})};
  }
- async invoke(p,name,args){if(name==='messages_inbox')return new DotInbox(this.app).list(p,args);if(name==='messages_ack')return new DotInbox(this.app).ack(p,args);requireThat(name==='messages_send','Unknown tool',404);return this.send(p,args);}
+ async invoke(p,name,args){
+  if(name==='messages_inbox'||name==='messages_ack'){
+   const caller=await getAgent(this.app,p.owner,p.agentId);
+   const inbox=isMuseAgent(caller)?new MuseInbox(this.app):new DotInbox(this.app);
+   const {agent_token:_,...rest}=args; // authentication, not a tool parameter
+   return name==='messages_inbox'?inbox.list(p,rest):inbox.ack(p,rest);
+  }
+  requireThat(name==='messages_send','Unknown tool',404);return this.send(p,args);}
  async receiveTelegram(bot,m,updateId){
   if(!bot.groupAgentId||m.chat?.type!=='private')return false;
   const age=Date.now()-m.date*1000;if(age>=DM_POLICY.receiptTtl||age< -60000)return true;
