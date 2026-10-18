@@ -19,7 +19,7 @@ export function normalizeGrokbotAgentName(value){
  requireThat(name.length>=1&&name.length<=255&&!/[\u0000-\u001f\u007f]/.test(name),'grokbot_agent_name must be 1–255 characters without control characters');
  return name;
 }
-const publicAgent = record => ({agent_id:record.agentId,handle:record.handle,display_name:record.displayName,grokbot_agent_name:record.grokbotAgentName??null,created_at:record.created});
+const publicAgent = record => ({agent_id:record.agentId,handle:record.handle,display_name:record.displayName,grokbot_agent_name:record.grokbotAgentName??null,bot_type:record.botType??null,created_at:record.created});
 export async function getAgent(app,owner,agentId){
  const record=typeof agentId==='string'?await app.store.get('agent',agentId):null;
  return record?.owner===owner?publicAgent(record):null;
@@ -27,10 +27,15 @@ export async function getAgent(app,owner,agentId){
 export async function listAgents(app,owner){
  return (await app.store.list('agent',owner)).map(publicAgent).sort((a,b)=>a.handle.localeCompare(b.handle));
 }
-export async function registerAgent(app,principal,args={}){
+export async function registerAgent(app,principal,args={},opts={}){
  requireThat(principal&&typeof principal.owner==='string','Authentication required',401);
  if(!(principal.authType==='api_key'||principal.authType==='oauth'&&principal.sessionId))throw Object.assign(new Error('Reconnect OAuth to register a logical agent'),{status:409,relayCode:'reconnect_required'});
  const handle=normalizeAgentHandle(args.handle);
+ const botType=opts.botType??null;
+ if(botType==='muse'){
+  requireThat(handle!=='dot','Handle dot is reserved for the ChatGPT agent',409);
+  requireThat(args.grokbot_agent_name===undefined||args.grokbot_agent_name===null,'muse agents do not use grokbot_agent_name',400);
+ }
  const displayName=args.display_name===undefined?handle:args.display_name;
  requireThat(typeof displayName==='string'&&displayName.trim().length>0&&displayName.length<=128,'Display name must be 1–128 characters');
  const grokbotAgentName=args.grokbot_agent_name===undefined?undefined:normalizeGrokbotAgentName(args.grokbot_agent_name);
@@ -48,11 +53,13 @@ export async function registerAgent(app,principal,args={}){
  const boundAgent=existingSession?.agentId??principal.agentId;
  requireThat(!boundAgent||boundAgent===agentId,'This session already has a different agent identity; reconnect to choose another handle',409);
  const agent_token=mintAgentToken(),tokenHash=hash(agent_token);
- const record={owner:principal.owner,agentId,handle,displayName:displayName.trim(),tokenHash,...(grokbotAgentName?{grokbotAgentName,grokbotSessionId}:{}),created:new Date().toISOString()};
+ const record={owner:principal.owner,agentId,handle,displayName:displayName.trim(),tokenHash,...(grokbotAgentName?{grokbotAgentName,grokbotSessionId}:{}),...(botType==='muse'?{botType:'muse'}:{}),created:new Date().toISOString()};
  const inserted=await store.insert('agent',agentId,record);
  if(!inserted){
   const existing=await store.get('agent',agentId);requireThat(existing?.owner===principal.owner,'Agent not found',404);
+  if(botType&&existing.botType&&existing.botType!==botType)requireThat(false,'Handle is already registered as a different bot type',409);
   const updated={...existing,tokenHash};if(args.display_name!==undefined)updated.displayName=displayName.trim();
+  if(botType==='muse')updated.botType='muse';
   if(grokbotAgentName!==undefined){
    if(grokbotAgentName===null){delete updated.grokbotAgentName;delete updated.grokbotSessionId;}
    else{updated.grokbotAgentName=grokbotAgentName;updated.grokbotSessionId=grokbotSessionId;}

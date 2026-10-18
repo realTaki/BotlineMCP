@@ -12,13 +12,15 @@
   private DMs (`type: "message.created"`) and actionable-error notifications.
   Dot alone receives `inbox.ready` and uses bounded 24-hour `messages_inbox` /
   explicit `messages_ack`; callback success must not discard dot inbox payloads.
+  Muse agents also use bounded 24-hour `messages_inbox` / explicit `messages_ack`,
+  polled on their own schedule with no `inbox.ready` wake.
   There is no per-group listener. Keep context in that bound conversation.
   BotlineMCP must not pretend to create platform tasks or retain a recoverable chat history.
 - When no X-MCP-Bot-Type, X-MCP-Agent-ID, or OAuth session identifies a profile,
   tools/list returns the full catalog and callers pass their own agent_token on
-  tool calls. X-MCP-Bot-Type of dot or grokbot filters tools/list to that connector
+  tool calls. X-MCP-Bot-Type of dot, grokbot or muse filters tools/list to that connector
   type. Profile filtering also applies when the header or OAuth session
-  identifies the agent: dot common tools plus inbox/ACK, other agents common
+  identifies the agent: dot and muse get common tools plus inbox/ACK, other agents common
   tools plus Cursor helpers. Resolve identity first on tools/call, then enforce
   the resolved agent's profile; a present X-MCP-Bot-Type must match that
   registered type. Preserve the explicit authenticated unlisted legacy-send
