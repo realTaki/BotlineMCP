@@ -14,7 +14,7 @@ export class Store {
   }
 
   async pruneGroupTransport(now=Date.now()) {
-    await this.pool.query("DELETE FROM mcp_records WHERE kind IN ('group_delivery','group_receipt','dot_inbox') AND (value->>'expires')::bigint<=$1",[now]);
+    await this.pool.query("DELETE FROM mcp_records WHERE kind IN ('group_delivery','group_receipt','dot_inbox','muse_inbox') AND (value->>'expires')::bigint<=$1",[now]);
   }
   // Use only on a Store whose connection is already checked out (withBotLock).
   // A second checkout here can deadlock the bounded pool. Session and xact
