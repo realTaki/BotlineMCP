@@ -65,8 +65,8 @@ export class App {
   async authVersion(owner) {return owner===INSTANCE_ID?this.instanceKeyHash:null;}
   async own(owner,id) {const bot=await this.store.get('bot',id);requireThat(bot?.owner===owner,'Bot not found',404);return bot;}
   view(bot) {return {bot_id:bot.id,username:bot.username,active:bot.active};}
-  async bind(owner,args,{agentId,bindingRoute,expectedBotId,bindingDiagnostic}={}) {
-    if(agentId){const result=await new BotBindings(this).bind(owner,args,{agentId,bindingDiagnostic});return result;}
+  async bind(owner,args,{agentId,bindingRoute,expectedBotId,bindingDiagnostic,migration}={}) {
+    if(agentId){const result=await new BotBindings(this).bind(owner,args,{agentId,bindingDiagnostic,migration});return result;}
     requireThat(typeof args.token==='string' && /^\d+:[A-Za-z0-9_-]{20,}$/.test(args.token),'Invalid bot token format');
     if(bindingDiagnostic)bindingDiagnostic.stage='telegram_identity';
     const me=await this.telegram(args.token,'getMe'); requireThat(me.is_bot,'Not a bot credential');
@@ -77,8 +77,17 @@ export class App {
     requireThat(!old || old.owner===owner,'Bot is already bound to another agent',409);
     if(bindingDiagnostic)bindingDiagnostic.stage='webhook_inspection';
     const target=`${this.origin}/telegram/${id}`, info=await this.telegram(args.token,'getWebhookInfo');
-    if(bindingDiagnostic&&info.url&&info.url!==target)bindingDiagnostic.stage='foreign_webhook';
-    requireThat(!info.url || info.url===target,'Bot webhook belongs to another service; disconnect it there first',409);
+    if(migration){
+      if(bindingDiagnostic)bindingDiagnostic.stage='migration_recheck';
+      requireThat(migration.botId===id&&migration.target===target&&migration.expires>Date.now()&&same(migration.fingerprint,hash(this.key+':webhook:'+info.url)),'Migration context changed; confirm again',409);
+    }else if(info.url&&info.url!==target){
+      if(bindingDiagnostic){
+        bindingDiagnostic.stage='foreign_webhook';
+        let host='unavailable';try{host=new URL(info.url).host;}catch{}
+        bindingDiagnostic.preview={botId:id,target,host,fingerprint:hash(this.key+':webhook:'+info.url)};
+      }
+      requireThat(false,'Bot webhook belongs to another service; explicit migration confirmation required',409);
+    }
     if(bindingDiagnostic)bindingDiagnostic.stage='binding_storage';
     let bot={id,owner,username:me.username,token:this.encrypt(args.token),hookSecret:old?.hookSecret??nonce(),active:false};
     if (!old) requireThat(await this.store.insert('bot',id,bot),'Concurrent binding; retry',409);
@@ -87,6 +96,11 @@ export class App {
     if(bindingDiagnostic)bindingDiagnostic.stage='webhook_write';
     await this.telegram(args.token,'setWebhook',{url:target,secret_token:bot.hookSecret,allowed_updates:['message','my_chat_member'],drop_pending_updates:false});
     if(bindingDiagnostic)bindingDiagnostic.stage='webhook_written';
+    if(migration){
+      if(bindingDiagnostic)bindingDiagnostic.stage='webhook_verification';
+      const observed=await this.telegram(args.token,'getWebhookInfo');
+      requireThat(observed.url===target,'Migration webhook verification failed',502);
+    }
     bot.active=true;
     await this.store.put('bot',id,bot);
     return this.view(bot);

@@ -275,3 +275,69 @@ test('Settings lookup matches a registered dot OAuth identity and parsed form bo
  const s=await login(f);const r=await request(f.app,'/settings/bind','POST','',{...formHeaders,cookie:s.cookie},{body:{csrf:s.csrf,token,agent_handle:'dot'}});
  assert.equal(r.status,200);assert.equal((await f.store.get('group_bot','123')).agentId,registered.agent_id);assertNoSecrets(r,token,apiKey,registered.agent_token);
 });
+
+async function migrationFixture(){
+ const f=fixture();f.hook='https://old.example/private-secret?key=synthetic_query_secret';f.mode='ok';
+ f.app.telegram=async(t,method,args)=>{
+  f.calls.push({method,args});
+  if(method==='getMe')return {id:Number(t.split(':')[0]),is_bot:true,username:'synthetic_bot'};
+  if(method==='getWebhookInfo'){if(f.mode==='verify-fail'&&f.wrote)throw Error('private failure');return {url:f.mode==='verify-mismatch'&&f.wrote?'https://changed.example/after':f.hook};}
+  if(method==='setWebhook'){f.wrote=true;f.hook=args.url;if(f.mode==='timeout')throw Error('secret timeout');return true;}
+  throw Error('unexpected method');
+ };
+ const initial=await login(f),preview=await submit(f,initial);assert.equal(preview.status,409);
+ const cookie=preview.headers['set-cookie'].split(';')[0],csrf=preview.body.match(/name="csrf" value="([A-Za-z0-9_-]+)"/)[1];
+ f.confirm={cookie,csrf};f.preview=preview;return f;
+}
+async function confirmMigration(f,fields={},headers={}){return submit(f,f.confirm,headers,{confirm_migration:'yes',...fields});}
+test('foreign webhook preview stores no token or raw URL; explicit one-use confirmation preserves pending and verifies target',async()=>{
+ const f=await migrationFixture();assert.match(f.preview.body,/old.example/);assertNoSecrets(f.preview,token,'private-secret','synthetic_query_secret',apiKey);
+ assertNoSecrets([...f.store.data],token,'private-secret','synthetic_query_secret');assert.equal(await f.store.get('bot','123'),undefined);assert(!f.calls.some(c=>c.method==='setWebhook'));
+ const [a,b]=await Promise.all([confirmMigration(f),confirmMigration(f)]);assert.deepEqual([a.status,b.status].sort(),[200,401]);
+ const writes=f.calls.filter(c=>c.method==='setWebhook');assert.equal(writes.length,1);assert.equal(writes[0].args.drop_pending_updates,false);assert.equal(writes[0].args.url,origin+'/telegram/123');assert(!f.calls.some(c=>c.method==='deleteWebhook'));
+ assert.equal(f.calls.at(-1).method,'getWebhookInfo');assert.equal((await f.store.get('bot','123')).active,true);assert.equal((await f.store.get('group_bot','123')).agentId,agentId);
+});
+test('migration rejects CSRF, foreign origin, changed target/token/hook, expiry and another agent without writing webhook',async()=>{
+ for(const mode of ['csrf','origin','token','hook','expired','other-agent','generation','auth','target','actor-rename','actor-delete']){
+  const f=await migrationFixture(),fields={},headers={};
+  if(mode==='csrf')fields.csrf='invalid';if(mode==='origin')headers.origin='https://evil.example';if(mode==='token')fields.token='456:'+token.split(':')[1];if(mode==='hook')f.hook='https://changed.example/secret';
+  const sid=hash(f.confirm.cookie.split('=')[1]),s=await f.store.get('settings_session',sid);
+  if(mode==='expired'){s.expires=Date.now()-1;await f.store.put('settings_session',sid,s);}
+  if(mode==='auth')f.app.instanceKeyHash=hash('different');
+  if(mode==='target'){f.app.origin='https://new.example';headers.origin=f.app.origin;}
+  if(mode==='actor-rename'){const a=await f.store.get('agent',agentId);await f.store.put('agent',agentId,{...a,handle:'renamed'});}
+  if(mode==='actor-delete'){const lock=f.store.withBotLock.bind(f.store);f.store.withBotLock=(k,fn)=>lock(k,async tx=>{await tx.delete('agent',agentId);return fn(tx);});}
+  if(mode==='other-agent')await f.store.put('group_bot','123',{owner:'mcp:admin',agentId:'other-agent',bindingId:'new'});
+  if(mode==='generation')await f.store.put('group_bot','123',{owner:'mcp:admin',agentId,bindingId:'new'});
+  const r=await confirmMigration(f,fields,headers);assert.notEqual(r.status,200,mode);assert(!f.calls.some(c=>c.method==='setWebhook'),mode);assertNoSecrets(r,token,'private-secret');
+ }
+});
+test('migration cancellation and expiration while waiting for lock do not mutate Telegram',async()=>{
+ const f=await migrationFixture();assert.equal((await confirmMigration(f,{confirm_migration:'no',token:''})).status,200);assert.equal((await confirmMigration(f)).status,401);assert(!f.wrote);
+ const g=await migrationFixture(),original=g.store.withBotLock.bind(g.store);
+ g.store.withBotLock=async(k,fn)=>original(k,async tx=>{const old=Date.now;Date.now=()=>old()+360000;try{return await fn(tx);}finally{Date.now=old;}});
+ assert.notEqual((await confirmMigration(g)).status,200);assert(!g.wrote);
+});
+test('migration timeout or verification failure is unconfirmed, inactive, one-use and never auto-rolled-back',async()=>{
+ for(const mode of ['timeout','verify-fail','verify-mismatch','db-fail']){
+  const f=await migrationFixture();f.mode=mode;
+  if(mode==='db-fail'){const put=f.store.put.bind(f.store);f.store.put=async(k,id,v)=>{if(k==='bot'&&v.active)throw Error('storage failed');return put(k,id,v);};}
+  const r=await confirmMigration(f);assert.equal(r.status,502);assert.match(r.body,/webhook_result_unconfirmed/);assertNoSecrets(r,'secret timeout',token);assert.equal((await f.store.get('bot','123')).active,false);
+  assert.equal((await confirmMigration(f)).status,401);assert.equal(f.calls.filter(c=>c.method==='setWebhook').length,1);assert(!f.calls.some(c=>c.method==='deleteWebhook'));
+ }
+});
+
+
+test('concurrent confirmation and cancellation cannot both claim success',async()=>{
+ for(const cancelFirst of [true,false]){
+  const f=await migrationFixture(),take=f.store.take.bind(f.store);let release,entered=0;
+  const barrier=new Promise(resolve=>release=resolve);
+  f.store.take=async(...args)=>{if(++entered===2)release();await barrier;return take(...args);};
+  const confirm=()=>confirmMigration(f),cancel=()=>confirmMigration(f,{confirm_migration:'no',token:''});
+  const results=await Promise.all((cancelFirst?[cancel,confirm]:[confirm,cancel]).map(fn=>fn()));
+  assert.deepEqual(results.map(r=>r.status).sort(),[200,401]);
+  const winner=results.find(r=>r.status===200);
+  if(winner.body.includes('Migration cancelled'))assert(!f.wrote);
+  else assert.equal(f.calls.filter(c=>c.method==='setWebhook').length,1);
+ }
+});

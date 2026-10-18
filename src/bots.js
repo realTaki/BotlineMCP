@@ -6,7 +6,7 @@ import {isMuseAgent} from './muse-inbox.js';
 export class BotBindings {
  constructor(app){this.app=app;}
  async actor(owner,agentId){requireThat(agentId&&await getAgent(this.app,owner,agentId),'Register and select an agent handle before binding a bot',409);}
- async bind(owner,args,{agentId,bindingDiagnostic}){
+ async bind(owner,args,{agentId,bindingDiagnostic,migration}){
   await this.actor(owner,agentId);
   return this.app.store.withBotLock('bot-binding:'+owner,async tx=>{
    const app=Object.assign(Object.create(Object.getPrototypeOf(this.app)),this.app,{store:tx});
@@ -22,12 +22,18 @@ export class BotBindings {
    requireThat(!routes.length||routes[0].id===expectedId,'This handle already has a bot; unbind it before binding another',409);
    const existing=await tx.get('group_bot',expectedId);
    requireThat(!existing||existing.owner===owner&&existing.agentId===agentId,'Bot belongs to another handle',409);
+   if(bindingDiagnostic)bindingDiagnostic.bindingGeneration=existing?.bindingId??null;
+   if(migration){
+    if(bindingDiagnostic)bindingDiagnostic.stage='migration_recheck';
+    const actor=await getAgent(app,owner,agentId);
+    requireThat(actor&&migration.agentId===agentId&&migration.handle===actor.handle&&migration.owner===owner&&migration.authVersion===app.instanceKeyHash&&migration.expires>Date.now()&&migration.bindingGeneration===(existing?.bindingId??null),'Migration context changed; confirm again',409);
+   }
    const route=existing??{owner,agentId,bindingId:nonce()};
    try{
     // The stored credential stays inside the server and is never returned to
     // MCP, diagnostic metadata, logs or the caller's argument list.
     const bindingArgs=hasExisting?{...args,token:app.decrypt(stored.token)}:args;
-    const bot=await app.bind(owner,bindingArgs,{bindingRoute:route,expectedBotId:expectedId,bindingDiagnostic});
+    const bot=await app.bind(owner,bindingArgs,{bindingRoute:route,expectedBotId:expectedId,bindingDiagnostic,migration});
     requireThat(bot.bot_id===expectedId,'Telegram bot identity mismatch',409);
     return {...bot,agent_id:agentId,credential_source:hasExisting?'stored':'provided',webhook_events:['message','my_chat_member']};
    }catch(error){

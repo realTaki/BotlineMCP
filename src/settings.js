@@ -19,7 +19,12 @@ function loginForm(origin) {
 }
 
 function botForm(session) {
-  return page('Add Telegram bot',`<h1>Add Telegram bot</h1><p>Your settings session expires after 10 minutes and permits one binding attempt.</p><p>By submitting, you authorize BotlineMCP to verify this bot with Telegram, store an encrypted working copy of its token, and register its Telegram webhook for the existing agent handle you choose. Each agent handle can bind at most one bot. Groups and supergroups are ignored. An existing webhook belonging to another service will not be replaced.</p><p class="note">Registered humans can DM every bound bot. Groups and supergroups are ignored. Unregistered users are denied. Unbinding deletes the stored bot token; rebinding requires entering the token again. Keep the bot token and recovery configuration in your own secure store; database loss or lost keys can make the working copy unrecoverable.</p><form method="post" action="/settings/bind" autocomplete="off"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><label for="agent-handle">Existing agent handle<input id="agent-handle" name="agent_handle" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]{1,63}" autocomplete="off" spellcheck="false" autocapitalize="none" required></label><p class="note">Use a handle already registered by your agent. This form does not create an agent.</p><label for="bot-token">Telegram Bot Token<input id="bot-token" type="password" name="token" maxlength="256" autocomplete="off" spellcheck="false" autocapitalize="none" required></label><button type="submit">Bind bot</button></form>`);
+  return page('Add Telegram bot',`<h1>Add Telegram bot</h1><p>Your settings session expires after 10 minutes and permits one binding attempt.</p><p>By submitting, you authorize BotlineMCP to verify this bot with Telegram, store an encrypted working copy of its token, and register its Telegram webhook for the existing agent handle you choose. Each agent handle can bind at most one bot. Groups and supergroups are ignored. An existing webhook belonging to another service will not be replaced without a separate explicit migration confirmation.</p><p class="note">Registered humans can DM every bound bot. Groups and supergroups are ignored. Unregistered users are denied. Unbinding deletes the stored bot token; rebinding requires entering the token again. Keep the bot token and recovery configuration in your own secure store; database loss or lost keys can make the working copy unrecoverable.</p><form method="post" action="/settings/bind" autocomplete="off"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><label for="agent-handle">Existing agent handle<input id="agent-handle" name="agent_handle" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]{1,63}" autocomplete="off" spellcheck="false" autocapitalize="none" required></label><p class="note">Use a handle already registered by your agent. This form does not create an agent.</p><label for="bot-token">Telegram Bot Token<input id="bot-token" type="password" name="token" maxlength="256" autocomplete="off" spellcheck="false" autocapitalize="none" required></label><button type="submit">Bind bot</button></form>`);
+}
+
+function migrationForm(session){
+ const m=session.migration;
+ return page('Confirm bot migration',`<h1>Confirm migration</h1><p>Error code: foreign_webhook. No webhook change was attempted.</p><p>Bot ${escapeHtml(m.botId)} currently sends updates to host <strong>${escapeHtml(m.host)}</strong>. The old path and query are hidden.</p><p>Move it to ${escapeHtml(new URL(m.target).origin)} for existing handle <strong>${escapeHtml(m.handle)}</strong>? This replaces the old webhook, stores an encrypted token working copy, and preserves pending updates. Pending messages may arrive here. Requests already in flight may still reach the old service. This is not an atomic cross-service transaction.</p><p>This confirmation expires in five minutes and can be used once. Re-enter the same bot token privately; it was not retained for this preview.</p><form method="post" action="/settings/bind" autocomplete="off"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><input type="hidden" name="agent_handle" value="${escapeHtml(m.handle)}"><input type="hidden" name="confirm_migration" value="yes"><label>Telegram Bot Token<input type="password" name="token" maxlength="256" autocomplete="off" required></label><button type="submit">Confirm migration to ${escapeHtml(m.handle)}</button></form><form method="post" action="/settings/bind"><input type="hidden" name="csrf" value="${escapeHtml(session.csrf)}"><input type="hidden" name="agent_handle" value="${escapeHtml(m.handle)}"><input type="hidden" name="confirm_migration" value="no"><input type="hidden" name="token" value=""><button type="submit">Cancel migration</button></form>`);
 }
 
 function checkSingleHeaders(req) {
@@ -93,7 +98,7 @@ export async function settings(app,req,path,readBody,send,res) {
     validationStage='request_format';
     if(req.method==='GET'&&(path==='/settings'||path==='/settings/bot')) {
       const session=await validSession(app,token);
-      if(session)return html(200,botForm(session));
+      if(session)return html(200,session.migration?migrationForm(session):botForm(session));
       if(token)clearCookie(res);
       requireThat(path==='/settings','Authentication required',401);
       return html(200,loginForm(app.origin));
@@ -114,7 +119,15 @@ export async function settings(app,req,path,readBody,send,res) {
     const session=await validSession(app,token);
     requireThat(session,'Authentication required',401);
     validationStage='form_fields';
-    const fields=await formFields(req,readBody,['csrf','token','agent_handle']);
+    const fields=await formFields(req,readBody,session.migration?['csrf','token','agent_handle','confirm_migration']:['csrf','token','agent_handle']);
+    if(session.migration){
+      requireThat(['yes','no'].includes(fields.confirm_migration)&&fields.agent_handle===session.migration.handle&&same(fields.csrf,session.csrf),'Request rejected',403);
+      if(fields.confirm_migration==='no'){
+        const cancelled=await app.store.take(SESSION_KIND,hash(token));clearCookie(res);
+        requireThat(cancelled&&activeSession(app,cancelled)&&same(cancelled.csrf,fields.csrf),'Authentication required',401);
+        return html(200,page('Migration cancelled','<h1>Migration cancelled</h1><p>No webhook change was attempted by this cancellation. <a href="/settings">Return to Settings</a></p>'));
+      }
+    }
     requireThat(same(fields.csrf,session.csrf),'Request rejected',403);
     validationStage='bot_token_format';
     requireThat(fields.token.length<=256&&/^\d+:[A-Za-z0-9_-]{20,}$/.test(fields.token),'Invalid request');
@@ -132,10 +145,19 @@ export async function settings(app,req,path,readBody,send,res) {
     // Per-attempt server-owned state, never request fields or raw errors. A write
     // may have completed remotely even if its response or final storage failed.
     const bindingDiagnostic={stage:'binding_validation'};
-    try {result=await app.bind(INSTANCE_ID,{token:fields.token},{agentId:agent.agent_id,bindingDiagnostic});}
+    try {result=await app.bind(INSTANCE_ID,{token:fields.token},{agentId:agent.agent_id,bindingDiagnostic,...(consumed.migration?{migration:consumed.migration}:{})});}
     catch {
       const stage=bindingDiagnostic.stage;
+      if(stage==='foreign_webhook'&&bindingDiagnostic.preview&&!consumed.migration){
+        const fresh=nonce(),migration={...bindingDiagnostic.preview,owner:INSTANCE_ID,agentId:agent.agent_id,handle,authVersion:app.instanceKeyHash,bindingGeneration:bindingDiagnostic.bindingGeneration,expires:Date.now()+5*60*1000};
+        const next={...consumed,expires:migration.expires,csrf:nonce(),migration};
+        await app.store.put(SESSION_KIND,hash(fresh),next);
+        res.setHeader('Set-Cookie',`${COOKIE}=${fresh}; ${COOKIE_FLAGS}; Max-Age=300`);
+        return html(409,migrationForm(next));
+      }
+
       const failures={
+        migration_recheck:['migration_changed','The confirmed bot, handle or old webhook changed, or confirmation expired. No webhook change was attempted. Start again to review the current state.'],
         binding_validation:['binding_rejected','Binding was rejected before any Telegram webhook change. Check the selected handle and its existing bot binding.'],
         telegram_identity:['telegram_identity_failed','Telegram bot identity could not be verified. Check the bot credential privately; Telegram may also be temporarily unavailable. No webhook change was attempted.'],
         webhook_inspection:['webhook_inspection_failed','The current Telegram webhook could not be checked. No webhook change was attempted.'],
@@ -148,7 +170,7 @@ export async function settings(app,req,path,readBody,send,res) {
     }
     const botId=/^\d+$/.test(result.bot_id)?result.bot_id:'unavailable';
     const username=typeof result.username==='string'&&/^[A-Za-z0-9_]{1,64}$/.test(result.username)?` (@${escapeHtml(result.username)})`:'';
-    return html(200,page('Bot bound',`<h1>Bot bound</h1><p>Telegram bot ${escapeHtml(botId)}${username} is connected.</p><p>Ask your agent to verify telegram_bot_get, call human_register once with a confirmed human and telegram_user_id, and maintain its agent.notification inbox subscription. Registered humans can DM every bound bot. Groups are ignored. Unregistered users are denied. No bot token is needed for these steps.</p><p><a href="/settings">Return to Settings</a></p>`));
+    return html(200,page('Bot bound',`<h1>Bot bound</h1><p>Telegram bot ${escapeHtml(botId)}${username} is connected.</p><p>Ask your agent to verify telegram_bot_get, call human_register once with a confirmed human and telegram_user_id, and follow its receiver profile: dot uses an agent.notification wake listener plus inbox/ACK, Muse polls inbox/ACK, Grok uses direct delivery, and generic agents use a verified webhook. See /setup.md. Registered humans can DM every bound bot. Groups are ignored. Unregistered users are denied. No bot token is needed for these steps.</p><p><a href="/settings">Return to Settings</a></p>`));
   } catch(error) {
     if(error.status===401)clearCookie(res);
     if(error.status===405)res.setHeader('Allow','POST');

@@ -172,3 +172,17 @@ explicit owner authorization. If no authorized peer or human is available, repor
 “configured, live delivery untested”, not ready end-to-end. Never create a real
 confirmation challenge just to test onboarding. Preserve tokens, bot identity and
 recovery configuration in an independent secure store.
+
+## Explicit migration from an old webhook
+
+Settings does not silently overwrite another service. On `foreign_webhook`, it offers
+a five-minute, one-use confirmation for this bot, existing handle and destination.
+Only the old host is displayed; path/query and credentials stay private. Re-enter
+the same token personally and choose Confirm migration, or Cancel. This replaces
+the old webhook with `setWebhook`, preserving pending updates, then reads back the
+new URL. No preliminary `deleteWebhook` is needed. The token is not retained for
+the preview. A changed webhook or local binding requires a fresh confirmation.
+Other agents' assigned bots cannot be taken. Telegram has no compare-and-swap webhook
+API: this is not atomic across Telegram and the database, and in-flight deliveries
+may still reach the old service. On unconfirmed result, do not blindly resubmit;
+inspect connection status first. This guide does not authorize migration by itself.
