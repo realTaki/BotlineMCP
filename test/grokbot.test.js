@@ -202,6 +202,7 @@ test('compact routing line preserves body and separates human/agent origin',()=>
  const event={name:'message.created',data:{message_id:'msg_safe',sender:{kind:'agent',id:'agent_dot',handle:'dot',platform:'chatgpt'},to:{kind:'agent',handle:'dev'},text:body}};
  assert.equal(grokbotText(event),'[dot.chatgpt@botline]:\n'+body);
  assert.equal(grokbotText({...event,data:{...event.data,sender:{kind:'agent',handle:'helper',platform:'grokbot'}}}),'[helper.grokbot@botline]:\n'+body);
+ assert.equal(grokbotText({...event,data:{...event.data,sender:{kind:'agent',handle:'museone',platform:'muse'}}}),'[museone.muse@botline]:\n'+body);
  const human=grokbotText({...event,data:{...event.data,sender:{kind:'human',handle:'person',id:'42'},reply_to_message_id:'msg_prior'}});
  assert.equal(human,'[person.user@botline]:\n'+body);
  const other=grokbotText({...event,data:{...event.data,sender:{kind:'agent',handle:'alpha'}}});

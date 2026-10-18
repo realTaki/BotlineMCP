@@ -1,3 +1,4 @@
+import {messageText,senderPlatform} from './message-text.js';
 import {hash,nonce,requireThat,signedHeaders} from './security.js';
 import {getAgent} from './agents.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
@@ -7,8 +8,8 @@ export const DOT_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,m
 // Logical routing under the existing shared instance authority, not a new account.
 // A Cursor-configured recipient always retains its existing delivery path.
 export const isDotInboxAgent=agent=>agent?.handle==='dot'&&!agent.grokbot_agent_name&&!agent.grokbotAgentName;
-const identity=p=>({kind:p.kind,id:p.id,...(p.handle?{handle:p.handle}:{})});
-const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:data.text,...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
+const identity=p=>({kind:p.kind,id:p.id,platform:senderPlatform(p),...(p.handle?{handle:p.handle}:{})});
+const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
 export class DotInbox {
  constructor(app){this.app=app;this.store=app.store;}
  async actor(p,store=this.store){
