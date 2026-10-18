@@ -41,6 +41,14 @@ export async function registerAgent(app,principal,args={},opts={}){
  const grokbotAgentName=args.grokbot_agent_name===undefined?undefined:normalizeGrokbotAgentName(args.grokbot_agent_name);
  const cursorApiKey=args.cursor_api_key===undefined?undefined:normalizeCursorApiKey(args.cursor_api_key);
  const agentId='agent_'+hash(JSON.stringify([principal.owner,handle]));
+ const compatible=existing=>{
+  if(!existing)return;
+  const existingType=existing.botType??(existing.handle==='dot'&&!existing.grokbotAgentName?'dot':'grokbot');
+  requireThat(!botType||existingType===botType,'Handle is already registered as a different bot type',409);
+  requireThat(existingType!=='muse'||!grokbotAgentName,'muse agents do not use grokbot_agent_name',400);
+ };
+ // Reject incompatible recovery before storing credentials or resolving a destination.
+ compatible(await app.store.get('agent',agentId));
  if(cursorApiKey)await app.store.withLock('human:'+principal.owner,async store=>{await storeCursorKey(store,app,principal.owner,cursorApiKey);});
  let grokbotSessionId;
  if(grokbotAgentName){
@@ -57,7 +65,7 @@ export async function registerAgent(app,principal,args={},opts={}){
  const inserted=await store.insert('agent',agentId,record);
  if(!inserted){
   const existing=await store.get('agent',agentId);requireThat(existing?.owner===principal.owner,'Agent not found',404);
-  if(botType&&existing.botType&&existing.botType!==botType)requireThat(false,'Handle is already registered as a different bot type',409);
+  compatible(existing);
   const updated={...existing,tokenHash};if(args.display_name!==undefined)updated.displayName=displayName.trim();
   if(botType==='muse')updated.botType='muse';
   if(grokbotAgentName!==undefined){

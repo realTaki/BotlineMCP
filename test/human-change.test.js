@@ -43,3 +43,29 @@ test('delivery cache population does not invalidate code, but configured destina
  for(const configuredChange of [false,true]){const f=await fixture(),c=await f.call(f.change),bot=await f.store.get('agent','bot-id');bot.grokbotSessionId='resolved-session';if(configuredChange)bot.grokbotAgentName='Different destination';await f.store.put('agent','bot-id',bot);
  if(configuredChange)await assert.rejects(f.call(confirmation(f,c)),/does not match/);else assert.equal((await f.call(confirmation(f,c))).human.telegram_user_id,'43');}
 });
+
+test('Muse confirmation uses dot and preserves the established dot/Grok pairing',async()=>{
+ const f=await fixture();
+ await f.store.put('agent','muse-id',{owner:f.p.owner,agentId:'muse-id',handle:'museone',botType:'muse',tokenHash:'muse-generation'});
+ const dotChallenge=await f.call(f.change);assert.equal(f.sent.at(-1).message.to,'helper');
+ await f.call(confirmation(f,dotChallenge));
+ const challengeKey=humanKey(f.p.owner,'person');
+ const previous=await f.store.get('human_change',challengeKey);await f.store.put('human_change',challengeKey,{...previous,expires:0});
+ const muse={...f.p,agentId:'muse-id'},change={...f.first,telegram_user_id:'43',display_name:'Updated by Muse'};
+ const c=await registerHuman(f.app,muse,change,{send:f.send});
+ assert.equal(f.sent.at(-1).message.to,'dot');assert.equal(c.status,'confirmation_required');
+ assert(!JSON.stringify(c).includes(code(f)));
+ const done=await registerHuman(f.app,muse,{...change,challenge_id:c.challenge_id,confirmation_code:code(f)},{send:f.send});
+ assert.equal(done.human.display_name,'Updated by Muse');
+});
+
+test('dot/Muse fallback confirmation works without Grok and ambiguous Muse verifiers fail closed',async()=>{
+ const f=await fixture();const grok=await f.store.get('agent','bot-id');delete grok.grokbotAgentName;await f.store.put('agent','bot-id',grok);
+ const muse={owner:f.p.owner,agentId:'muse-id',handle:'museone',botType:'muse'};
+ await f.store.put('agent','muse-id',muse);
+ const c=await f.call(f.change);assert.equal(f.sent.at(-1).message.to,'museone');
+ assert.match(f.sent.at(-1).message.text,/Do not automatically relay/);
+ assert.equal((await f.call(confirmation(f,c))).human.telegram_user_id,'43');
+ await f.store.put('agent','muse-two',{...muse,agentId:'muse-two',handle:'musetwo'});
+ await assert.rejects(f.call({...f.first,telegram_user_id:'43',display_name:'Ambiguous'}),/Exactly one/);
+});
