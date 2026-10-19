@@ -2,12 +2,16 @@ import {messageText,senderPlatform} from './message-text.js';
 import {hash,requireThat} from './security.js';
 import {getAgent} from './agents.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
+import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 
 // Inbox for `muse` bot-type agents (e.g. Muse instances on outbound-only VMs).
 // Same poll pattern as the dot inbox, but without webhook wake hints: muse
 // agents cannot receive inbound callbacks, so they poll messages_inbox on a
 // schedule and ACK after processing. Telegram payloads retain the same
 // current-human and binding-generation checks as the dot inbox.
+// The inbound "delivered" receipt (👀) fires when the agent's poll first
+// returns the message: muse deliveries never pass through group_delivery,
+// so the dispatch-loop receipt cannot cover them.
 export const MUSE_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,maxPageSize:100};
 export const isMuseAgent=agent=>agent?.botType==='muse'||agent?.bot_type==='muse';
 const identity=p=>({kind:p.kind,id:p.id,platform:senderPlatform(p),...(p.handle?{handle:p.handle}:{})});
@@ -41,13 +45,25 @@ export class MuseInbox {
   const limit=args.limit??MUSE_INBOX_POLICY.pageSize,cursor=args.cursor??0;
   requireThat(Number.isInteger(limit)&&limit>=1&&limit<=MUSE_INBOX_POLICY.maxPageSize,'Invalid limit');
   requireThat(Number.isSafeInteger(cursor)&&cursor>=0,'Invalid cursor');
-  return this.store.withLock('dms:'+p.owner,async tx=>{
+  const delivered=await this.store.withLock('dms:'+p.owner,async tx=>{
    await this.actor(p,tx);await tx.pruneGroupTransport();
    const rows=(await tx.listAgentInbox(p.owner,p.agentId)).filter(d=>d.sequence>cursor).sort((a,b)=>a.sequence-b.sequence),visible=[];
    for(const d of rows)if(await this.allowed(d,tx))visible.push(d);
-   const page=visible.slice(0,limit);
-   return {messages:page.map(d=>publicMessage(d.event.data)),next_cursor:visible.length>limit?page.at(-1).sequence:null};
+   const page=visible.slice(0,limit),targets=[];
+   // Marking inside the lock (like dot-inbox) keeps concurrent polls from
+   // double-firing the receipt; the reaction itself is opportunistic.
+   for(const d of page){
+    if(d.reaction==='delivered')continue;
+    const target=telegramReactionTarget(d.event);
+    if(!target)continue;
+    targets.push(target);
+    await tx.put('muse_inbox',d.id,{...d,reaction:'delivered'});
+   }
+   return {targets,messages:page.map(d=>publicMessage(d.event.data)),next_cursor:visible.length>limit?page.at(-1).sequence:null};
   });
+  for(const target of delivered.targets)inboundTelegramReaction(this.app,target,INBOUND_REACTIONS.delivered);
+  holdInboundReactions(this.app);
+  return {messages:delivered.messages,next_cursor:delivered.next_cursor};
  }
  async ack(p,args={}){
   requireThat(Object.keys(args).every(k=>k==='message_ids')&&Array.isArray(args.message_ids)&&args.message_ids.length>0&&args.message_ids.length<=100&&args.message_ids.every(id=>typeof id==='string'&&/^[\w-]{1,128}$/.test(id)),'Invalid message_ids');

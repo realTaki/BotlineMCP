@@ -13,8 +13,18 @@ Auth:
 
 Config via environment:
   BOTLINE_MCP_URL        e.g. https://botlinemcp.vercel.app/mcp (required)
-  BOTLINE_MCP_API_KEY    instance key, Bearer on every request (required)
-  BOTLINE_AGENT_TOKEN    per-agent token from register, passed as tool arg
+  BOTLINE_MCP_API_KEY    instance key, Bearer on every request (required);
+                         or point BOTLINE_MCP_API_KEY_FILE at a file holding it
+  BOTLINE_AGENT_TOKEN    per-agent token from register, passed as tool arg;
+                         or point BOTLINE_AGENT_TOKEN_FILE at a file holding it
+  A direct variable wins when both it and its _FILE variant are set.
+  Keep secrets out of scripts in plaintext: store them in files with 0600
+  permissions (or your platform's secure card / vault surrogate) and let the
+  client read them at runtime.
+
+  Proxies: the client follows your host's proxy environment
+  (https_proxy/HTTPS_PROXY). Hosts that reach the internet only through an
+  egress proxy must have these set; proxies are never disabled.
 
 Subcommands:
   register --handle HANDLE [--display-name NAME]
@@ -23,7 +33,7 @@ Subcommands:
   ack --ids ID[,ID...]             acknowledge processed messages
   send --to HANDLE --text TEXT --request-id RID [--reply-to MSG_ID]
 
-Hook usage: run `poll` on a schedule (20-60s). A non-empty JSON array means
+Hook usage: run `poll` on a schedule (every 5-10 seconds). A non-empty JSON array means
 pending mail: wake a worker, deduplicate effects by message_id, then `ack`
 the handled message_ids. A crash before ACK must leave messages replayable.
 """
@@ -61,7 +71,10 @@ class Client:
         self.extra_headers = {"X-MCP-Bot-Type": BOT_TYPE}
         if bearer:
             self.extra_headers["Authorization"] = "Bearer " + bearer
-        self.opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+        # Never disable proxies: some hosts can only reach the internet
+        # through an egress proxy (https_proxy/HTTPS_PROXY). A bare
+        # ProxyHandler() reads the environment; ProxyHandler({}) broke those.
+        self.opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler())
         self.session = None
         self.protocol = None
         self.seq = 0
@@ -184,6 +197,33 @@ def need_env(name):
     return value
 
 
+def need_secret(name):
+    """Load a credential from the environment or from a file it points at.
+
+    `name` wins when set; otherwise `<name>_FILE` must name a readable file
+    holding the secret (matches the secure-card / vault-surrogate and 0600-file
+    flows in the onboarding docs). Fails fast naming both sources.
+    """
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    file_env = name + "_FILE"
+    path = os.environ.get(file_env, "").strip()
+    if not path:
+        print(f"error: neither {name} nor {file_env} (path to a file holding it) is set",
+              file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        value = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as err:
+        print(f"error: cannot read {file_env}={path}: {err}", file=sys.stderr)
+        raise SystemExit(2)
+    if not value:
+        print(f"error: {file_env}={path} is empty", file=sys.stderr)
+        raise SystemExit(2)
+    return value
+
+
 def cmd_register(client, args):
     result = client.call_tool("agent_register", {
         "handle": args.handle,
@@ -193,7 +233,8 @@ def cmd_register(client, args):
     print(json.dumps({"registered": result.get("registered"), "handle": result.get("handle"),
                       "agent_token": token}, ensure_ascii=False))
     if token:
-        print("Store agent_token as BOTLINE_AGENT_TOKEN; it is shown only once.",
+        print("Store agent_token in a 0600 file and set BOTLINE_AGENT_TOKEN_FILE to it "
+              "(or export BOTLINE_AGENT_TOKEN); it is shown only once.",
               file=sys.stderr)
 
 
@@ -314,14 +355,14 @@ def main():
     download.add_argument("--output", required=True)
     args = parser.parse_args()
     url = need_env("BOTLINE_MCP_URL")
-    api_key = need_env("BOTLINE_MCP_API_KEY")
+    api_key = need_secret("BOTLINE_MCP_API_KEY")
     try:
         if args.command == "register":
             client = Client(url, bearer=api_key)
             client.initialize()
             cmd_register(client, args)
         else:
-            args.token = need_env("BOTLINE_AGENT_TOKEN")
+            args.token = need_secret("BOTLINE_AGENT_TOKEN")
             client = Client(url, bearer=api_key)
             client.initialize()
             {"whoami": cmd_whoami, "poll": cmd_poll, "ack": cmd_ack, "send": cmd_send, "upload": cmd_upload, "download": cmd_download}[args.command](client, args)
