@@ -1,17 +1,20 @@
-import {messageText,senderPlatform} from './message-text.js';
 import {hash,requireThat} from './security.js';
 import {getAgent} from './agents.js';
 import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
+import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 
 // Inbox for `muse` bot-type agents (e.g. Muse instances on outbound-only VMs).
 // Same poll pattern as the dot inbox, but without webhook wake hints: muse
 // agents cannot receive inbound callbacks, so they poll messages_inbox on a
 // schedule and ACK after processing. Telegram payloads retain the same
 // current-human and binding-generation checks as the dot inbox.
+// The inbound "delivered" receipt (👀) fires when the agent's poll first
+// returns the message: muse deliveries never pass through group_delivery,
+// so the dispatch-loop receipt cannot cover them.
 export const MUSE_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,maxPageSize:100};
 export const isMuseAgent=agent=>agent?.botType==='muse'||agent?.bot_type==='muse';
-const identity=p=>({kind:p.kind,id:p.id,platform:senderPlatform(p),...(p.handle?{handle:p.handle}:{})});
-const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),...(data.attachments?{attachments:data.attachments}:{}),...(data.attachment_error?{attachment_error:data.attachment_error}:{}),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
+const identity=p=>({kind:p.kind,id:p.id,...(p.handle?{handle:p.handle}:{})});
+const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:data.text,...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
 export class MuseInbox {
  constructor(app){this.app=app;this.store=app.store;}
  async actor(p,store=this.store){
@@ -24,7 +27,7 @@ export class MuseInbox {
   requireThat(messages.length<MUSE_INBOX_POLICY.maxMessages,'Muse inbox capacity reached; retry after ACK or expiry',503);
   const seq=await tx.get('muse_seq',agentId),sequence=(seq?.sequence??0)+1;
   await tx.put('muse_seq',agentId,{owner,agentId,sequence});
-  await tx.insert('muse_inbox',hash(`${event.eventId}:${agentId}`),{owner,agentId,event,sequence,expires:Math.min(Date.now()+MUSE_INBOX_POLICY.payloadTtl,...(event.data.attachments??[]).map(a=>Date.parse(a.expires_at)))});
+  await tx.insert('muse_inbox',hash(`${event.eventId}:${agentId}`),{owner,agentId,event,sequence,expires:Date.now()+MUSE_INBOX_POLICY.payloadTtl});
  }
  async allowed(d,store=this.store){
   if(d.expires<=Date.now()||!await this.app.ownerActive(d.owner))return false;
@@ -41,13 +44,25 @@ export class MuseInbox {
   const limit=args.limit??MUSE_INBOX_POLICY.pageSize,cursor=args.cursor??0;
   requireThat(Number.isInteger(limit)&&limit>=1&&limit<=MUSE_INBOX_POLICY.maxPageSize,'Invalid limit');
   requireThat(Number.isSafeInteger(cursor)&&cursor>=0,'Invalid cursor');
-  return this.store.withLock('dms:'+p.owner,async tx=>{
+  const delivered=await this.store.withLock('dms:'+p.owner,async tx=>{
    await this.actor(p,tx);await tx.pruneGroupTransport();
    const rows=(await tx.listAgentInbox(p.owner,p.agentId)).filter(d=>d.sequence>cursor).sort((a,b)=>a.sequence-b.sequence),visible=[];
    for(const d of rows)if(await this.allowed(d,tx))visible.push(d);
-   const page=visible.slice(0,limit);
-   return {messages:page.map(d=>publicMessage(d.event.data)),next_cursor:visible.length>limit?page.at(-1).sequence:null};
+   const page=visible.slice(0,limit),targets=[];
+   // Marking inside the lock (like dot-inbox) keeps concurrent polls from
+   // double-firing the receipt; the reaction itself is opportunistic.
+   for(const d of page){
+    if(d.reaction==='delivered')continue;
+    const target=telegramReactionTarget(d.event);
+    if(!target)continue;
+    targets.push(target);
+    await tx.put('muse_inbox',d.id,{...d,reaction:'delivered'});
+   }
+   return {targets,messages:page.map(d=>publicMessage(d.event.data)),next_cursor:visible.length>limit?page.at(-1).sequence:null};
   });
+  for(const target of delivered.targets)inboundTelegramReaction(this.app,target,INBOUND_REACTIONS.delivered);
+  holdInboundReactions(this.app);
+  return {messages:delivered.messages,next_cursor:delivered.next_cursor};
  }
  async ack(p,args={}){
   requireThat(Object.keys(args).every(k=>k==='message_ids')&&Array.isArray(args.message_ids)&&args.message_ids.length>0&&args.message_ids.length<=100&&args.message_ids.every(id=>typeof id==='string'&&/^[\w-]{1,128}$/.test(id)),'Invalid message_ids');
