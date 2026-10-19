@@ -13,6 +13,7 @@ failures and omissions; a source test pass does not prove external delivery.
 
 Review:
 
+- Initialize `instructions` do-this sections, unregistered `agent_whoami` next_step, bootstrap tool list, lowercase handles, trimmed `agent_token`, and `cursor_key_required`
 - API-key/OAuth identity and agent-token selection, including mismatches and rotation
 - Private-message admission, unique confirmed human mappings and ignored groups
 - One bot per handle, explicit stored-bot migration and foreign-webhook rejection

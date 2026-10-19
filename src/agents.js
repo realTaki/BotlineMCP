@@ -1,13 +1,17 @@
 import {hash,nonce,requireThat,same} from './security.js';
 import {normalizeCursorApiKey,storeCursorKey,resolveGrokbotSession} from './grokbot.js';
+import {MISSING_GROKBOT_NAME_WARNING,PREVIOUS_TOKEN_REVOKED,REGISTER_NEXT_STEP} from './onboarding.js';
 
 // Agents are routing identities under one owner's shared authority, not accounts
 // or independently authorized security principals. Handles let reconnections
 // deliberately recover the same identity; client_id never identifies an agent.
+export const AGENT_HANDLE_PATTERN='^[a-z0-9][a-z0-9._-]{1,63}$';
+export const AGENT_HANDLE_DESCRIPTION='Lowercase routing handle: 2–64 letters, digits, dots, underscores or hyphens. Uppercase is rejected.';
+const AGENT_HANDLE_RE=new RegExp(AGENT_HANDLE_PATTERN);
 export function normalizeAgentHandle(value){
  requireThat(typeof value==='string','Agent handle required');
- const handle=value.trim().toLowerCase();
- requireThat(/^[a-z0-9][a-z0-9._-]{1,63}$/.test(handle),'Agent handle must be 2–64 lowercase letters, digits, dots, underscores or hyphens');
+ const handle=value.trim();
+ requireThat(AGENT_HANDLE_RE.test(handle),'Agent handle must be 2–64 lowercase letters, digits, dots, underscores or hyphens');
  return handle;
 }
 // Grok Bot agents are addressed by the name shown in the Grok Bot app (BDK
@@ -63,32 +67,62 @@ export async function registerAgent(app,principal,args={},opts={}){
  const agent_token=mintAgentToken(),tokenHash=hash(agent_token);
  const record={owner:principal.owner,agentId,handle,displayName:displayName.trim(),tokenHash,...(grokbotAgentName?{grokbotAgentName,grokbotSessionId}:{}),...(botType==='muse'?{botType:'muse'}:{}),created:new Date().toISOString()};
  const inserted=await store.insert('agent',agentId,record);
+ let previous_agent_token_revoked=false;
  if(!inserted){
   const existing=await store.get('agent',agentId);requireThat(existing?.owner===principal.owner,'Agent not found',404);
   compatible(existing);
-  const updated={...existing,tokenHash};if(args.display_name!==undefined)updated.displayName=displayName.trim();
+  const updated={...existing,tokenHash,revokedTokenHashes:rememberRevoked(existing.revokedTokenHashes,existing.tokenHash)};if(args.display_name!==undefined)updated.displayName=displayName.trim();
   if(botType==='muse')updated.botType='muse';
   if(grokbotAgentName!==undefined){
    if(grokbotAgentName===null){delete updated.grokbotAgentName;delete updated.grokbotSessionId;}
    else{updated.grokbotAgentName=grokbotAgentName;updated.grokbotSessionId=grokbotSessionId;}
   }
   await store.put('agent',agentId,updated);
+  previous_agent_token_revoked=true;
  }
  if(principal.authType==='oauth'){
   await store.insert('agent_session',principal.sessionId,{owner:principal.owner,agentId});
   const linked=await store.get('agent_session',principal.sessionId);
   requireThat(linked?.owner===principal.owner&&linked.agentId===agentId,'This session already has a different agent identity; reconnect to choose another handle',409);
  }
- return {...await getAgent({store},principal.owner,agentId),agent_token};
+ const published=await getAgent({store},principal.owner,agentId);
+ const result={...published,agent_token,next_step:REGISTER_NEXT_STEP};
+ if(previous_agent_token_revoked)Object.assign(result,{previous_agent_token_revoked:true,token_notice:PREVIOUS_TOKEN_REVOKED});
+ const warning=await receiveWarning(store,published);
+ if(warning)result.warning=warning;
+ return result;
  });
 }
+const rememberRevoked=(hashes,tokenHash)=>{
+ if(typeof tokenHash!=='string'||tokenHash.length===0)return Array.isArray(hashes)?hashes.slice(-7):[];
+ const next=[...(Array.isArray(hashes)?hashes.filter(h=>h!==tokenHash):[]),tokenHash];
+ return next.slice(-8);
+};
+async function receiveWarning(store,agent){
+ if((agent.handle==='dot'&&!agent.grokbot_agent_name)||agent.bot_type==='muse'||agent.grokbot_agent_name)return null;
+ const sub=await store.get('group_subscription',hash(JSON.stringify([agent.agent_id,'chat.created',null])));
+ if(sub?.expires>Date.now())return null;
+ return MISSING_GROKBOT_NAME_WARNING;
+}
 const mintAgentToken=()=>'mcp_at_'+nonce();
-export const callerTokenProperty={type:'string',minLength:16,maxLength:128,description:'Your per-agent secret from agent_register or agent_token_rotate. Shown once. Store it; never post it in chat.'};
+export const callerTokenProperty={type:'string',minLength:16,maxLength:128,description:'Your per-agent secret from agent_register or agent_token_rotate. Shown once. Leading and trailing whitespace is ignored. Store it; never post it in chat.'};
+export function trimAgentToken(token){
+ return typeof token==='string'?token.trim():'';
+}
 export async function getAgentByToken(app,owner,token){
- if(typeof token!=='string'||token.trim()==='')return null;
- const tokenHash=hash(token.trim());
+ const trimmed=trimAgentToken(token);
+ if(trimmed==='')return null;
+ const tokenHash=hash(trimmed);
  const record=(await app.store.list('agent',owner)).find(a=>typeof a.tokenHash==='string'&&same(a.tokenHash,tokenHash));
  return record?.owner===owner?publicAgent(record):null;
+}
+async function tokenLookupError(app,owner,token){
+ const trimmed=trimAgentToken(token);
+ if(trimmed==='')throw Object.assign(new Error('Unknown agent token'),{status:404,relayCode:'agent_token_unknown'});
+ const tokenHash=hash(trimmed);
+ const agents=await app.store.list('agent',owner);
+ if(agents.some(a=>Array.isArray(a.revokedTokenHashes)&&a.revokedTokenHashes.some(h=>same(h,tokenHash))))throw Object.assign(new Error('Revoked agent token; use the current agent_token from the latest register or rotate'),{status:404,relayCode:'agent_token_revoked'});
+ throw Object.assign(new Error('Unknown agent token'),{status:404,relayCode:'agent_token_unknown'});
 }
 export async function rotateAgentToken(app,principal){
  requireThat(principal&&typeof principal.owner==='string'&&typeof principal.agentId==='string','Authentication required',401);
@@ -96,16 +130,16 @@ export async function rotateAgentToken(app,principal){
  return app.store.withLock('human:'+principal.owner,async store=>{
   const existing=await store.get('agent',principal.agentId);
   requireThat(existing?.owner===principal.owner,'Unknown agent identity',403);
-  await store.put('agent',principal.agentId,{...existing,tokenHash:hash(agent_token)});
-  return {...publicAgent(existing),agent_token};
+  await store.put('agent',principal.agentId,{...existing,tokenHash:hash(agent_token),revokedTokenHashes:rememberRevoked(existing.revokedTokenHashes,existing.tokenHash)});
+  return {...publicAgent(existing),agent_token,previous_agent_token_revoked:true,token_notice:PREVIOUS_TOKEN_REVOKED,next_step:REGISTER_NEXT_STEP};
  });
 }
 export async function resolveCallerAgent(app,principal,args={},{optional=false}={}){
  requireThat(principal&&typeof principal.owner==='string','Authentication required',401);
  let fromToken=null;
- if(typeof args?.agent_token==='string'&&args.agent_token.trim()!==''){
+ if(trimAgentToken(args?.agent_token)!==''){
   fromToken=await getAgentByToken(app,principal.owner,args.agent_token);
-  requireThat(fromToken,'Unknown or revoked agent token',404);
+  if(!fromToken)await tokenLookupError(app,principal.owner,args.agent_token);
  }
  if(principal.authType==='oauth'){
   if(principal.agentId){
