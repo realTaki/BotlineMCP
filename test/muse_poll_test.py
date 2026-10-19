@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -127,5 +128,76 @@ class AttachmentTests(unittest.TestCase):
                 args=SimpleNamespace(token="synthetic",id="att_media",output=str(Path(folder)/("invalid-"+str(i))))
                 with self.assertRaises(m.McpError):m.cmd_download(Files(content),args)
                 self.assertFalse(Path(args.output).exists())
+
+class CredentialTests(unittest.TestCase):
+    def _clear(self):
+        for key in ("BOTLINE_MCP_API_KEY", "BOTLINE_MCP_API_KEY_FILE",
+                    "BOTLINE_AGENT_TOKEN", "BOTLINE_AGENT_TOKEN_FILE"):
+            os.environ.pop(key, None)
+
+    def test_env_beats_file(self):
+        self._clear()
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("  file-key  \n")
+        try:
+            os.environ["BOTLINE_MCP_API_KEY"] = " env-key "
+            os.environ["BOTLINE_MCP_API_KEY_FILE"] = f.name
+            self.assertEqual(m.need_secret("BOTLINE_MCP_API_KEY"), "env-key")
+        finally:
+            self._clear()
+            os.unlink(f.name)
+
+    def test_file_fallback_is_stripped(self):
+        self._clear()
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("  file-token\n")
+        try:
+            os.environ["BOTLINE_AGENT_TOKEN_FILE"] = f.name
+            self.assertEqual(m.need_secret("BOTLINE_AGENT_TOKEN"), "file-token")
+        finally:
+            self._clear()
+            os.unlink(f.name)
+
+    def test_neither_set_exits_2(self):
+        self._clear()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as cm:
+                m.need_secret("BOTLINE_MCP_API_KEY")
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("BOTLINE_MCP_API_KEY_FILE", err.getvalue())
+
+    def test_unreadable_or_empty_file_exits_2(self):
+        self._clear()
+        os.environ["BOTLINE_MCP_API_KEY_FILE"] = "/nonexistent/botline-key"
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                m.need_secret("BOTLINE_MCP_API_KEY")
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("   \n")
+        try:
+            os.environ["BOTLINE_MCP_API_KEY_FILE"] = f.name
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    m.need_secret("BOTLINE_MCP_API_KEY")
+        finally:
+            self._clear()
+            os.unlink(f.name)
+
+    def test_proxies_are_not_disabled(self):
+        # BALTHASAR's env reaches the internet only through an egress proxy;
+        # ProxyHandler({}) made every request fail with a TLS error.
+        self._clear()
+        os.environ["https_proxy"] = "http://egress-proxy:8080"
+        try:
+            client = m.Client("https://botlinemcp.vercel.app/mcp", bearer="x")
+        finally:
+            os.environ.pop("https_proxy", None)
+        import urllib.request
+        handlers = [h for h in client.opener.handlers
+                    if isinstance(h, urllib.request.ProxyHandler)]
+        self.assertTrue(handlers, "expected a ProxyHandler on the opener")
+        self.assertTrue(any(h.proxies.get("https") == "http://egress-proxy:8080"
+                            for h in handlers),
+                        "proxy env must reach the client (proxies were disabled)")
 
 unittest.main()

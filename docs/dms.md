@@ -217,7 +217,8 @@ credentials, raw secret-bearing URLs or stack traces.
   `ReactionTypeEmoji` values: 🕊 after admission and persist (server received),
   👀 after the agent path accepts the payload (Grok Bot: `api.cursor.com` 2xx;
   webhook agents: `message.created` queued and notified; dot: inbox row queued
-  and `inbox.ready` notified), and 💔 after a terminal delivery failure (not an
+  and `inbox.ready` notified; muse: inbox row queued and the first
+  `messages_inbox` poll returns it), and 💔 after a terminal delivery failure (not an
   in-progress retry). Messages rejected at admission, including unregistered
   private DMs and ignored groups, receive no reaction. A failed reaction is
   logged only; it does not change persist/dispatch, is not retried on the main

@@ -299,6 +299,24 @@ test('dot inbound DMs react delivered after inbox.ready and failed after wake ex
  assert.deepEqual(fail.telegram.filter(c=>c.method==='setMessageReaction'&&c.args.reaction[0].emoji===INBOUND_REACTIONS.delivered).map(c=>c.args.message_id).sort((a,b)=>a-b),[9,10]);
 });
 
+test('muse inbound Telegram DMs react delivered on first inbox poll, exactly once',async()=>{
+ const f=await museFixture();const dm=await boundBot(f,f.museA.agentId);
+ await f.app.receive('123','hook',{update_id:9001,message:dm});await waitInboundReactions();
+ // Muse deliveries bypass group_delivery, so dispatch alone must not react.
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received]);
+ const first=await f.museInbox.list(f.museA);await waitInboundReactions();
+ assert.equal(first.messages.length,1);assert.ok(first.messages[0].text.endsWith('hello dm'),first.messages[0].text);
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ assert.equal((await f.store.list('muse_inbox'))[0].reaction,'delivered');
+ // Re-polling the same message must not double-fire the receipt.
+ await f.museInbox.list(f.museA,{cursor:first.next_cursor??0});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ // Non-Telegram muse mail (agent-to-agent) never triggers a reaction.
+ await f.g.send(f.museB,{to:'museone',text:'agent mail',request_id:'muse-react-agent-mail'});
+ await f.museInbox.list(f.museA);await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+});
+
 test('Telegram webhook returns while waitUntil holds inbound reaction work',async()=>{
  const f=await fixture();const dm=await boundBot(f,f.a.agentId);
  const held=[];f.app.waitUntil=work=>held.push(work);
@@ -361,6 +379,24 @@ test('muse agents poll an isolated inbox; sends skip webhook delivery; ACK is id
  await f.g.send(f.museA,{to:'dot',text:'muse to dot',request_id:'muse-send-3'});
  assert.equal((await new DotInbox(f.app).list(dotP)).messages.length,1);
  assert.equal((await f.museInbox.list(f.museA)).messages.length,1);
+});
+
+test('muse inbound Telegram DMs react delivered on first inbox poll, exactly once',async()=>{
+ const f=await museFixture();const dm=await boundBot(f,f.museA.agentId);
+ await f.app.receive('123','hook',{update_id:9001,message:dm});await waitInboundReactions();
+ // Muse deliveries bypass group_delivery, so dispatch alone must not react.
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received]);
+ const first=await f.museInbox.list(f.museA);await waitInboundReactions();
+ assert.equal(first.messages.length,1);assert.equal(first.messages[0].text,'[person.user@botline]:\nhello dm');
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ assert.equal((await f.store.list('muse_inbox'))[0].reaction,'delivered');
+ // Re-polling the same message must not double-fire the receipt.
+ await f.museInbox.list(f.museA,{cursor:first.next_cursor??0});await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
+ // Non-Telegram muse mail (agent-to-agent) never triggers a reaction.
+ await f.g.send(f.museB,{to:'museone',text:'agent mail',request_id:'muse-react-agent-mail'});
+ await f.museInbox.list(f.museA);await waitInboundReactions();
+ assert.deepEqual(reactionEmojis(f.telegram),[INBOUND_REACTIONS.received,INBOUND_REACTIONS.delivered]);
 });
 test('muse re-register keeps bot type; conflicting type is rejected',async()=>{
  const f=await fixture();
