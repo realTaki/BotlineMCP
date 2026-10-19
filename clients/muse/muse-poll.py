@@ -12,9 +12,17 @@ Auth:
   argument (it identifies which agent is calling).
 
 Config via environment:
-  BOTLINE_MCP_URL        e.g. https://botlinemcp.vercel.app/mcp (required)
-  BOTLINE_MCP_API_KEY    instance key, Bearer on every request (required)
-  BOTLINE_AGENT_TOKEN    per-agent token from register, passed as tool arg
+  BOTLINE_MCP_URL             e.g. https://botlinemcp.vercel.app/mcp (required)
+  BOTLINE_MCP_API_KEY         instance key, Bearer on every request (required)
+                              ...or BOTLINE_MCP_API_KEY_FILE: read the key from
+                              this file (for vault/secure-card flows that drop
+                              the key into a 0600 file instead of the env)
+  BOTLINE_AGENT_TOKEN         per-agent token from register, passed as tool arg
+                              ...or BOTLINE_AGENT_TOKEN_FILE: read it from file
+
+The opener uses the default proxy handling: hosts that need an egress proxy
+set https_proxy/https_proxy in the environment and the client follows them.
+Do not disable proxies here.
 
 Subcommands:
   register --handle HANDLE [--display-name NAME]
@@ -28,9 +36,6 @@ pending mail: wake a worker, deduplicate effects by message_id, then `ack`
 the handled message_ids. A crash before ACK must leave messages replayable.
 """
 import argparse
-import base64
-import hashlib
-from pathlib import Path
 import json
 import os
 import sys
@@ -61,7 +66,10 @@ class Client:
         self.extra_headers = {"X-MCP-Bot-Type": BOT_TYPE}
         if bearer:
             self.extra_headers["Authorization"] = "Bearer " + bearer
-        self.opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+        # Default opener: follows the host's proxy environment
+        # (https_proxy/https_proxy). Some hosts reach the internet only through
+        # an egress proxy; disabling proxies here breaks TLS on those hosts.
+        self.opener = urllib.request.build_opener(NoRedirect())
         self.session = None
         self.protocol = None
         self.seq = 0
@@ -161,14 +169,12 @@ class Client:
             return result
         raise McpError(f"initialize failed for all protocol versions: {last}")
 
-    def call_tool(self, name, arguments, native=False):
+    def call_tool(self, name, arguments):
         result = self._post("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
             texts = [b.get("text", "") for b in result.get("content", [])
                      if isinstance(b, dict)]
             raise McpError("tool error: " + " | ".join(texts))
-        if native:
-            return result
         if isinstance(result.get("structuredContent"), dict):
             return result["structuredContent"]
         texts = [b.get("text", "") for b in result.get("content", [])
@@ -180,6 +186,29 @@ def need_env(name):
     value = os.environ.get(name, "").strip()
     if not value:
         print(f"error: {name} is not set", file=sys.stderr)
+        raise SystemExit(2)
+    return value
+
+
+def need_secret(name, file_var=None):
+    """Read a credential from <name>, or from the file named by <file_var>.
+
+    Vault/secure-card flows may drop the secret into a file (e.g. a 0600
+    token file) instead of an environment variable; <file_var> bridges that.
+    """
+    value = os.environ.get(name, "").strip()
+    if not value and file_var:
+        path = os.environ.get(file_var, "").strip()
+        if path:
+            try:
+                with open(path) as fh:
+                    value = fh.read().strip()
+            except OSError as err:
+                print(f"error: cannot read {file_var}={path}: {err}", file=sys.stderr)
+                raise SystemExit(2)
+    if not value:
+        names = f"{name} (or {file_var})" if file_var else name
+        print(f"error: {names} is not set", file=sys.stderr)
         raise SystemExit(2)
     return value
 
@@ -244,42 +273,10 @@ def cmd_send(client, args):
         "agent_token": args.token,
         "to": args.to,
         "text": args.text,
-        **({"attachment_ids": [args.attachment_id]} if getattr(args, "attachment_id", None) else {}),
         "request_id": args.request_id,
         **({"reply_to_message_id": args.reply_to} if args.reply_to else {}),
     })
     print(json.dumps(result, ensure_ascii=False))
-
-
-def cmd_upload(client, args):
-    with open(args.file, "rb") as file:
-        data = file.read(2 * 1024 * 1024 + 1)
-    if not data or len(data) > 2 * 1024 * 1024:
-        raise McpError("attachment must be 1 byte to 2 MiB")
-    result = client.call_tool("attachments_upload", {"agent_token": args.token,
-        "request_id": args.request_id, "name": Path(args.file).name,
-        "data": base64.b64encode(data).decode("ascii")})
-    print(json.dumps(result, ensure_ascii=False))
-
-
-def cmd_download(client, args):
-    result = client.call_tool("attachments_read", {"agent_token": args.token,
-        "attachment_id": args.id}, native=True)
-    metadata = result.get("structuredContent", {})
-    blobs = [b.get("data") if b.get("type") == "image" else b.get("resource", {}).get("blob")
-             for b in result.get("content", []) if b.get("type") in ("image", "resource")]
-    if len(blobs) != 1 or not isinstance(blobs[0], str) or len(blobs[0]) > 2796204:
-        raise McpError("invalid attachment response")
-    try:
-        data = base64.b64decode(blobs[0], validate=True)
-    except ValueError:
-        raise McpError("invalid attachment base64") from None
-    if metadata.get("attachment_id") != args.id or len(data) != metadata.get("size") or hashlib.sha256(data).hexdigest() != metadata.get("sha256"):
-        raise McpError("attachment integrity mismatch")
-    # Explicit user path only; never derive a local path from the remote filename.
-    with open(args.output, "xb") as file:
-        file.write(data)
-    print(json.dumps({**metadata, "saved_to": args.output}, ensure_ascii=False))
 
 
 def main():
@@ -301,31 +298,24 @@ def main():
 
     send = sub.add_parser("send", help="send a DM to a handle")
     send.add_argument("--to", required=True)
-    send.add_argument("--text", default="")
-    send.add_argument("--attachment-id")
+    send.add_argument("--text", required=True)
     send.add_argument("--request-id", required=True, help="stable ID for this send; reuse on every retry")
     send.add_argument("--reply-to")
 
-    upload = sub.add_parser("upload", help="upload a file up to 2 MiB")
-    upload.add_argument("--file", required=True)
-    upload.add_argument("--request-id", required=True)
-    download = sub.add_parser("download", help="save authorized bytes; never overwrite or execute")
-    download.add_argument("--id", required=True)
-    download.add_argument("--output", required=True)
     args = parser.parse_args()
     url = need_env("BOTLINE_MCP_URL")
-    api_key = need_env("BOTLINE_MCP_API_KEY")
+    api_key = need_secret("BOTLINE_MCP_API_KEY", "BOTLINE_MCP_API_KEY_FILE")
     try:
         if args.command == "register":
             client = Client(url, bearer=api_key)
             client.initialize()
             cmd_register(client, args)
         else:
-            args.token = need_env("BOTLINE_AGENT_TOKEN")
+            args.token = need_secret("BOTLINE_AGENT_TOKEN", "BOTLINE_AGENT_TOKEN_FILE")
             client = Client(url, bearer=api_key)
             client.initialize()
-            {"whoami": cmd_whoami, "poll": cmd_poll, "ack": cmd_ack, "send": cmd_send, "upload": cmd_upload, "download": cmd_download}[args.command](client, args)
-    except (McpError, OSError) as err:
+            {"whoami": cmd_whoami, "poll": cmd_poll, "ack": cmd_ack, "send": cmd_send}[args.command](client, args)
+    except McpError as err:
         print(f"error: {err}", file=sys.stderr)
         raise SystemExit(1)
 
