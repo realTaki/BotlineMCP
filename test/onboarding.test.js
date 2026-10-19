@@ -38,7 +38,7 @@ test('anonymous discovery explains authentication while business calls still rej
 });
 test('one canonical guide covers hosted and selfhost readiness without credential or delivery shortcuts',()=>{
  assert.equal(SETUP_GUIDE,readFileSync(new URL('../public/setup.md',import.meta.url),'utf8'));
- for(const phrase of ['ChatGPT dot onboarding','Muse onboarding','Grok Bot onboarding','Generic webhook onboarding','session advisory locks','transaction-pooling','DDL','--env-file','configured','relay.error','seen-state','agent_whoami','revokes the previous','same origin','live delivery untested','confirmation codes','If the BotlineMCP connector is already installed','~/.secrets/BOTLINE_<HANDLE>_AGENT_TOKEN'])assert(SETUP_GUIDE.includes(phrase),phrase);
+ for(const phrase of ['ChatGPT dot onboarding','Muse onboarding','Grok Bot onboarding','Generic webhook onboarding','session advisory locks','transaction-pooling','DDL','--env-file','configured','relay.error','seen-state','agent_whoami','revokes the previous','same origin','live delivery untested','confirmation codes','If the BotlineMCP connector is already installed','~/.secrets/BOTLINE_<HANDLE>_AGENT_TOKEN','agents_list'])assert(SETUP_GUIDE.includes(phrase),phrase);
  assert(!SETUP_GUIDE.includes('https://botlinemcp.vercel.app/mcp'));
  const readme=readFileSync(new URL('../README.md',import.meta.url),'utf8');assert.match(readme,/public\/setup.md/);
  const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8');assert.match(source,/\+SETUP_GUIDE/);assert.doesNotMatch(source,/const museOnboarding=/);

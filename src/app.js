@@ -2,7 +2,7 @@ import {SUPPORTED_VERSIONS,SERVER_INFO,SERVER_VERSION,STREAMABLE_HTTP_VERSION,pr
 import {tryLanding,tryMcpGuide,SETUP_GUIDE} from './landing.js';
 import {INSTANCE_ID} from './config.js';
 import {authenticatePrincipal,oauth} from './oauth.js';
-import {registerAgent,listAgents,getAgent,resolveCallerAgent,rotateAgentToken,callerTokenProperty,AGENT_HANDLE_PATTERN,AGENT_HANDLE_DESCRIPTION} from './agents.js';
+import {registerAgent,getAgent,resolveCallerAgent,rotateAgentToken,callerTokenProperty,AGENT_HANDLE_PATTERN,AGENT_HANDLE_DESCRIPTION} from './agents.js';
 import {CLIENT_DO_THIS,unregisteredNextStep,toolDescription,CURSOR_API_KEY_DESCRIPTION,BOOTSTRAP_EXCLUDED} from './onboarding.js';
 import {Attachments,attachmentTools,ATTACHMENT_POLICY} from './attachments.js';
 import {Dms,dmTools,dmEvents} from './dms.js';
@@ -11,7 +11,7 @@ import {isMuseAgent} from './muse-inbox.js';
 import {BotBindings} from './bots.js';
 import {listHumans} from './telegram-owner.js';
 import {registerHuman} from './human-change.js';
-import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
+import {telegramHumanAllowed,telegramSenderAllowed,markTelegramDmAccepted,clearTelegramDmAccepted} from './telegram-policy.js';
 import {RelayErrors,relayErrorDetails} from './relay-errors.js';
 import {settings} from './settings.js';
 import {DENIED_REPLY_POLICY} from './denied-replies.js';
@@ -41,7 +41,7 @@ export const tools=[
   {name:'agent_token_rotate',description:'Issue a new agent_token for this agent and invalidate the previous one. The new token is shown once. Store it; never post it in chat. Pass your current agent_token.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}},
   {name:'cursor_key_set',description:'Optional. Replace the stored Cursor API key for this instance after registration. Usually not needed during bootstrap; omit cursor_api_key on agent_register first and wait for cursor_key_required. Write-only; the key is never returned. Ask the owner before sending. Cached Grok Bot session ids are cleared so the next delivery resolves them again. Pass your agent_token.',inputSchema:schema({cursor_api_key:{type:'string',minLength:16,maxLength:512,description:CURSOR_API_KEY_DESCRIPTION},agent_token:callerTokenProperty},['cursor_api_key']),annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true}},
   {name:'cursor_key_clear',description:'Optional. Remove the stored Cursor API key for this instance. Grok Bot delivery fails until a key is stored again with cursor_key_set or agent_register. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true}},
-  {name:'agents_list',description:'List logical agents in this owner’s private relay. These are routing identities within shared instance authority. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:true}},
+  {name:'agents_list',description:'List only the targets the current caller can deliver to. An agent appears when it has a receive channel: Grok Bot with grokbot_agent_name, a dot or muse pull queue, or a verified agent.notification webhook. A human appears only when this caller has a bound Telegram bot and that human has already accepted this private DM. The caller is omitted. messages_send still validates any handle. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:true}},
   {name:'human_register',description:'Optional. Register a human with one confirmed Telegram user ID, unique across human handles. agent_token identifies you. human is the lowercase human handle. Call it once; that human may DM every bound bot. Actual changes to existing humans require a five-minute code sent to exactly one existing different-type agent. Repeat identical arguments with challenge_id and confirmation_code; that agent must show the code only to the human, never relay it directly. Identical requests and first registration do not need a code. This depends on agent compliance, not server-guaranteed human approval. ID replacement also requires replace_telegram_user_id equal to the current ID. Requires explicit human identity confirmation. Does not create credentials and does not enroll per bot. Read human mappings through telegram_bot_get. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty,challenge_id:{type:'string',description:'Returned challenge ID for an existing-human change.'},confirmation_code:{type:'string',description:'One-use code obtained by the human from the other-type agent, valid for five minutes. Never retrieve it automatically from another agent.'},human:{type:'string',minLength:2,maxLength:64,pattern:AGENT_HANDLE_PATTERN,description:AGENT_HANDLE_DESCRIPTION},display_name:{type:'string',maxLength:128},telegram_user_id:{type:'string',pattern:'^[1-9][0-9]*$'},replace_telegram_user_id:{type:'string',pattern:'^[1-9][0-9]*$'}},['human','telegram_user_id']),annotations:{readOnlyHint:false,idempotentHint:true}},
   ...dmTools,
   ...attachmentTools,
@@ -124,7 +124,7 @@ export class App {
     if(name==='agent_token_rotate')return rotateAgentToken(this,principal);
     if(name==='cursor_key_set')return setCursorKey(this,principal,args);
     if(name==='cursor_key_clear')return clearCursorKey(this,principal);
-    if(name==='agents_list')return {agents:await listAgents(this,owner),has_cursor_key:await hasCursorKey(this,owner)};
+    if(name==='agents_list')return {agents:await new Dms(this).listSendable(principal),has_cursor_key:await hasCursorKey(this,owner)};
     if(name==='attachments_upload')return new Attachments(this).upload(principal,args);
     if(name==='attachments_read')return new Attachments(this).read(principal,args.attachment_id);
     if(dmTools.some(t=>t.name===name))return new Dms(this).invoke(principal,name,args);
@@ -242,8 +242,15 @@ export class App {
     const bot=await this.store.get('bot',botId);requireThat(bot&&same(secret,bot.hookSecret),'Unauthorized webhook',403);
     if(!bot.active)return true;
     if(!update||Array.isArray(update)||!Number.isSafeInteger(update.update_id)||update.update_id<0)return true;
-    if(update.my_chat_member)return true;
     const humans=await listHumans(this,bot.owner);
+    if(update.my_chat_member){
+      const member=update.my_chat_member,fromId=member.from?.id,chat=member.chat,status=member.new_chat_member?.status;
+      if(chat?.type==='private'&&Number.isSafeInteger(fromId)&&fromId>0&&String(chat.id)===String(fromId)&&telegramHumanAllowed(humans,fromId)){
+        if(status==='member')await markTelegramDmAccepted(this.store,bot.owner,botId,fromId);
+        else if(status==='kicked'||status==='left')await clearTelegramDmAccepted(this.store,botId,fromId);
+      }
+      return true;
+    }
     const m=update.message,positive=id=>Number.isSafeInteger(id)&&id>0;
     if(!m||typeof m.from?.is_bot!=='boolean'||!positive(m.from?.id)||!Number.isSafeInteger(m.chat?.id)||m.chat.id===0||!positive(m.message_id)||!(typeof m.text==='string'&&m.text.length||m.photo||m.document||m.video||m.audio||m.voice||m.sticker||m.animation)||!Number.isSafeInteger(m.date)||m.date<0||!Number.isFinite(new Date(m.date*1000).getTime())||!['private','group','supergroup'].includes(m.chat.type))return true;
     if(m.chat.type!=='private')return true;
@@ -263,6 +270,7 @@ export class App {
       }
       return true;
     }
+    await markTelegramDmAccepted(this.store,bot.owner,botId,senderId);
     const groupRoute=await this.store.get('group_bot',botId);
     if(groupRoute?.owner===bot.owner){
       if(m.chat.type!=='private')return true;

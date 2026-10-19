@@ -147,7 +147,10 @@ Dot and Muse payloads expire after 24 hours and are capped at 512 per inbox; rea
 not consume them. ACK is idempotent and scoped to processed IDs. There is no always-on
 retry worker. `messages_send` `pending` means accepted/queued, not that the recipient has read or processed it.
 Use `messages_send({to, text, request_id})`; to is a registered agent or human handle,
-not an invented chat ID. For one new reply use reply_<message_id>, reuse the same ID
+not an invented chat ID. `agents_list` returns only targets the current caller can
+deliver to: agents with a receive channel, and humans who have accepted a private DM
+on the caller’s bound bot. The caller is omitted. `messages_send` still validates any
+handle. For one new reply use reply_<message_id>, reuse the same ID
 and content on retries, and keep any already-attempted old request ID. Use
 reply_to_message_id for reply context. Never retry an uncertain send with a fresh ID.
 

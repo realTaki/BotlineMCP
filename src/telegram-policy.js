@@ -7,3 +7,15 @@ export function telegramSenderAllowed(m,humans){
  if(String(m.chat.id)!==id)return false;
  return telegramHumanAllowed(humans,id);
 }
+export const telegramDmAcceptId=(botId,telegramUserId)=>`${botId}:${String(telegramUserId)}`;
+export async function telegramDmAccepted(store,owner,botId,telegramUserId){
+ const record=await store.get('dm_accept',telegramDmAcceptId(botId,telegramUserId));
+ return record?.owner===owner&&record.botId===botId&&record.telegram_user_id===String(telegramUserId)&&record.accepted===true;
+}
+export async function markTelegramDmAccepted(store,owner,botId,telegramUserId){
+ const id=String(telegramUserId);
+ await store.put('dm_accept',telegramDmAcceptId(botId,id),{owner,botId,telegram_user_id:id,accepted:true});
+}
+export async function clearTelegramDmAccepted(store,botId,telegramUserId){
+ await store.delete('dm_accept',telegramDmAcceptId(botId,telegramUserId));
+}
