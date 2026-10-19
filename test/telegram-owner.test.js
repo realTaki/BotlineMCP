@@ -22,7 +22,7 @@ test('humans are keyed by handle with one-to-one Telegram mappings and explicit 
  const f=await fixture();let human=await getHuman(f.app,owner,'human-owner');
  assert.equal(human.type,'human');assert.equal(human.telegram_user_id,'42');assert.equal(human.provenance,'configured_by_authenticated_owner');assert.equal(human.display_name,'Owner');
  assert.equal((await configureHuman(f.app,owner,{human_handle:'human-owner',telegram_user_id:'42'})).display_name,'Owner');
- human=await configureHuman(f.app,owner,{human_handle:' REPLACEMENT ',telegram_user_id:'43'});
+ human=await configureHuman(f.app,owner,{human_handle:' replacement ',telegram_user_id:'43'});
  assert.equal(human.handle,'replacement');assert.equal(human.display_name,'replacement');assert.equal(human.telegram_user_id,'43');assert.equal((await f.store.list('human',owner)).length,2);
  assert.equal((await getHumanByTelegramId(f.app,owner,'43')).handle,'replacement');assert.equal((await listHumans(f.app,owner)).length,2);assert.equal(await getHuman(f.app,owner),null);
  await configureHuman(f.app,owner,{human_handle:'replacement',telegram_user_id:'44',replace_telegram_user_id:'43'});assert.equal((await listHumans(f.app,owner)).length,2);assert.equal(await getHumanByTelegramId(f.app,owner,'43'),null);
@@ -32,7 +32,7 @@ test('humans are keyed by handle with one-to-one Telegram mappings and explicit 
 test('human configuration rejects invalid IDs, handles, display names and agent collisions',async()=>{
  const f=await fixture();const before=await getHuman(f.app,owner,'human-owner');
  for(const telegram_user_id of ['0','-1','01','abc','9007199254740992',42])await assert.rejects(configureHuman(f.app,owner,{human_handle:'valid-human',telegram_user_id}));
- for(const human_handle of ['','a','bad handle','assistant'])await assert.rejects(configureHuman(f.app,owner,{human_handle,telegram_user_id:'42'}));
+ for(const human_handle of ['','a','bad handle','assistant','Replacement'])await assert.rejects(configureHuman(f.app,owner,{human_handle,telegram_user_id:'42'}));
  await assert.rejects(configureHuman(f.app,owner,{human_handle:'valid-human',telegram_user_id:'42',human_display_name:''}));assert.deepEqual(await getHuman(f.app,owner,'human-owner'),before);
 });
 test('Telegram group joins are ignored for the private-DM product',async()=>{

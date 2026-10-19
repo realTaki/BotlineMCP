@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {registerAgent,getAgent,listAgents,rotateAgentToken,resolveCallerAgent} from '../src/agents.js';
+import {unregisteredNextStep,BOOTSTRAP_EXCLUDED} from '../src/onboarding.js';
 import {authenticate,authenticatePrincipal,oauth} from '../src/oauth.js';
 import {hash} from '../src/security.js';
 import {INSTANCE_ID} from '../src/config.js';
@@ -43,16 +44,21 @@ async function connect(app,handle,extraParams={}){
 }
 async function refresh(app,tokens){const result=await endpoint(app,'/oauth/token','POST',new URLSearchParams({client_id:tokens.client_id,resource:tokens.resource,refresh_token:tokens.refresh_token,grant_type:'refresh_token'}).toString());return {...tokens,...result.body};}
 
-test('registry normalizes handles, preserves IDs, updates explicit names, and scopes owner lookups',async()=>{
- const app=fixture();const first=await registerAgent(app,root,{handle:' Alice ',display_name:'Alice'});
+const publicFields=result=>{const {agent_token,next_step,warning,previous_agent_token_revoked,token_notice,...pub}=result;return pub;};
+test('registry requires lowercase handles, preserves IDs, updates explicit names, and scopes owner lookups',async()=>{
+ const app=fixture();const first=await registerAgent(app,root,{handle:'alice',display_name:'Alice'});
+ assert.equal(first.next_step,'Confirm with agent_whoami.');
+ assert.match(first.warning,/will not receive replies/);
+ await assert.rejects(registerAgent(app,root,{handle:'Alice'}),/lowercase/);
+ await assert.rejects(registerAgent(app,root,{handle:' Alice '}),/lowercase|handle/);
  const again=await registerAgent(app,root,{handle:'alice',display_name:'Changed'});
  assert.equal(first.agent_id,again.agent_id);assert.equal(first.created_at,again.created_at);assert.equal(first.handle,'alice');assert.equal(again.display_name,'Changed');
  assert.match(first.agent_token,/^mcp_at_/);assert.match(again.agent_token,/^mcp_at_/);assert.notEqual(first.agent_token,again.agent_token);
+ assert.equal(again.previous_agent_token_revoked,true);assert.match(again.token_notice,/revoked/i);
  const third=await registerAgent(app,root,{handle:'alice'});
  assert.equal(third.display_name,'Changed');assert.notEqual(third.agent_token,again.agent_token);
- const {agent_token,...pub}=third;
  assert.equal(await getAgent(app,'other-owner',first.agent_id),null);
- assert.deepEqual(await listAgents(app,owner),[pub]);
+ assert.deepEqual(await listAgents(app,owner),[publicFields(third)]);
  const stored=await app.store.get('agent',first.agent_id);
  assert.equal(stored.tokenHash,hash(third.agent_token));
  assert(!JSON.stringify(stored).includes(third.agent_token));
@@ -71,7 +77,10 @@ test('agent_token_rotate mints a new token and invalidates the previous hash',as
  const stored=await app.store.get('agent',registered.agent_id);
  assert.equal(stored.tokenHash,hash(rotated.agent_token));
  assert.notEqual(stored.tokenHash,hash(registered.agent_token));
- await assert.rejects(resolveCallerAgent(app,root,{agent_token:registered.agent_token}),/unknown or revoked agent token/i);
+ await assert.rejects(resolveCallerAgent(app,root,{agent_token:registered.agent_token}),e=>/revoked agent token/i.test(e.message)&&e.relayCode==='agent_token_revoked');
+ await assert.rejects(resolveCallerAgent(app,root,{agent_token:'mcp_at_no-such-token-0001'}),e=>/unknown agent token/i.test(e.message)&&e.relayCode==='agent_token_unknown');
+ const padded=await resolveCallerAgent(app,root,{agent_token:'  '+rotated.agent_token+'  '});
+ assert.equal(padded.agent_id,registered.agent_id);
  const resolved=await resolveCallerAgent(app,root,{agent_token:rotated.agent_token});
  assert.equal(resolved.agent_id,registered.agent_id);assert.equal(resolved.agent_token,undefined);
 });
@@ -93,7 +102,7 @@ test('identical OAuth client IDs get distinct logical identities and stable refr
  assert.deepEqual(await authenticatePrincipal(app,request(renewed.access_token)),pa);
  // Request headers cannot impersonate another agent through an OAuth grant.
  assert.deepEqual(await authenticatePrincipal(app,request(a.access_token,{'x-mcp-agent-id':pb.agentId})),pa);
- const reconnected=await connect(app,'ALICE');
+ const reconnected=await connect(app,'alice');
  assert.equal((await authenticatePrincipal(app,request(reconnected.access_token))).agentId,pa.agentId);
  await assert.rejects(refresh(app,a),/Invalid refresh token/);
 });
@@ -156,7 +165,8 @@ test('actual Postgres SQL: registry registration and session binding commit atom
 
 test('whoami exposes peers or unregistered, never legacy storage owner or admin role',async()=>{
  const {App,tools}=await import('../src/app.js');const f=fixture();const app=new App({store:f.store,instanceKey:apiKey,origin:f.origin});
- assert.deepEqual(await app.invoke(owner,'agent_whoami',{},root),{registered:false,agent_id:null,server_version:'0.6.23',tool_profile:'bootstrap',available_tool_names:tools.map(t=>t.name)});
+ const bootstrap=tools.map(t=>t.name).filter(n=>!BOOTSTRAP_EXCLUDED.includes(n));
+ assert.deepEqual(await app.invoke(owner,'agent_whoami',{},root),{registered:false,agent_id:null,next_step:unregisteredNextStep(null),server_version:'0.6.24',tool_profile:'bootstrap',available_tool_names:bootstrap,has_cursor_key:false});
  const agent=await registerAgent(app,root,{handle:'peer',display_name:'Before'});
  const principal={...root,agentId:agent.agent_id};const before=await app.invoke(owner,'agent_whoami',{},principal);
  assert.equal(before.registered,true);assert.equal(before.agent_id,agent.agent_id);assert(!('role' in before));assert(!('instance_id' in before));assert(!JSON.stringify(before).includes('mcp:admin'));

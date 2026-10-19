@@ -205,7 +205,7 @@ test('Binding requires an existing same-owner handle without auto-selecting or c
 test('Existing API-key session binds the selected normalized handle',async()=>{
   const f=fixture(),s=await login(f);let called;
   f.app.bind=async(owner,args,options)=>{called={owner,args,options};return {bot_id:'123',username:'synthetic_bot'};};
-  const result=await submit(f,s,{}, {agent_handle:' SETTINGS-AGENT '});
+  const result=await submit(f,s,{}, {agent_handle:' settings-agent '});
   assert.equal(result.status,200);
   assert.deepEqual(called,{owner:'mcp:admin',args:{token},options:{agentId,bindingDiagnostic:{stage:'binding_validation'}}});
   assert.equal((await f.store.list('agent')).length,1);

@@ -60,22 +60,28 @@ Grok Bot agents cannot echo webhook verification challenges, so they cannot hold
 `https://api.cursor.com/v0/grokbot` session API, using a Cursor API key stored
 for this instance.
 
-1. The Grok Bot connects to `/mcp` with `Authorization: Bearer <MCP_API_KEY>`
-   and `X-MCP-Bot-Type: grokbot`. Install one shared connector. Do not put
-   `X-MCP-Agent-ID` on it.
-2. Call `agent_register` with its handle (letters, digits, `.`, `_`, `-`; stored
-   lowercase, e.g. `DEV.GrokBot` → `dev.grokbot`) and `grokbot_agent_name`: its name
-   exactly as shown in the Grok Bot app. On the first registration for this
-   Cursor account, also pass `cursor_api_key`. Ask the owner before sending that
-   key. BotlineMCP encrypts it with the derived storage key and never returns it.
-   Registration resolves `POST /v0/grokbot/sessions {name}` and caches the
-   session id. Repeating `agent_register` updates the name; `null` clears it.
-   Each successful `agent_register` also issues a fresh `agent_token` and
-   invalidates the previous one. That is the migration path for existing Grok
-   Bots. `cursor_key_set` replaces the stored key. `cursor_key_clear` removes it.
-3. Save the returned `agent_token` and pass it on later tool calls. Never post
-   it in chats. Call `agent_token_rotate` to rotate later. `X-MCP-Agent-ID`
-   remains a fallback. No subscriptions are needed.
+1. If the BotlineMCP connector is already installed, use it. Do not ask for
+   `MCP_API_KEY`. The Grok Bot connects to `/mcp` with
+   `Authorization: Bearer <MCP_API_KEY>` and `X-MCP-Bot-Type: grokbot`. Install
+   one shared connector. Do not put `X-MCP-Agent-ID` on it.
+2. Call `agent_whoami` with the saved `agent_token` first. Call `agent_register`
+   only if unregistered, with a lowercase handle (letters, digits, `.`, `_`, `-`;
+   uppercase is rejected) and `grokbot_agent_name`: its name exactly as shown in
+   the Grok Bot app. Omit `cursor_api_key` first; the server returns
+   `cursor_key_required` when this instance has no stored Cursor API key and one
+   is required. Only then ask the owner and pass that key. BotlineMCP encrypts
+   it with the derived storage key and never returns it. Registration resolves
+   `POST /v0/grokbot/sessions {name}` and caches the session id. Repeating
+   `agent_register` updates the name; `null` clears it. Each successful
+   `agent_register` also issues a fresh `agent_token` and revokes the previous
+   one. That is the migration path for existing Grok Bots. `cursor_key_set`
+   replaces the stored key. `cursor_key_clear` removes it. Confirm with
+   `agent_whoami`.
+3. Save the returned `agent_token` at `~/.secrets/BOTLINE_<HANDLE>_AGENT_TOKEN`
+   and pass it on later tool calls. Never post it in chats. Call
+   `agent_token_rotate` to rotate later. `X-MCP-Agent-ID` remains a fallback.
+   No subscriptions are needed. Replies arrive in this Grok Bot session prefixed
+   `[handle.type@botline]:`.
 
 BotlineMCP posts inbound private DMs only to names registered with `grokbot_agent_name`.
 Delivery uses the cached session id and `POST /v0/grokbot/sessions/{id}/messages`
@@ -98,10 +104,10 @@ relay-error reporting as webhooks.
 
 ## Public tools
 
-The full MCP catalog contains thirteen tools. When no header or OAuth session
-identifies the agent, `tools/list` returns that catalog and callers pass
-`agent_token` on tool calls. Profile filtering applies when the header or OAuth
-session identifies the agent:
+The identity-free catalog lists every public tool. An unregistered authenticated
+connection (bootstrap) omits `telegram_*`, `human_register`, and `cursor_key_*`
+until registration. Callers pass `agent_token` on tool calls. Profile filtering
+applies when the header or OAuth session identifies the agent:
 
 - Agent identity: `agent_register`, `agent_token_rotate`, `agents_list`, `agent_whoami`
 - Cursor key: `cursor_key_set`, `cursor_key_clear`
@@ -112,7 +118,10 @@ session identifies the agent:
 `messages_send` requires `to` and `request_id`, plus nonempty `text` and/or one `attachment_ids` entry. `to` is a handle, not a
 chat id. Text is limited to 4096 characters. Request IDs must be 8–128 letters,
 digits, underscores or hyphens. Reusing a send ID with different content within
-its receipt window is rejected.
+its receipt window is rejected. `pending` means accepted/queued, not that the
+recipient has read it. The response includes where replies to the sender will
+be delivered, or a warning if that handle currently has no receive channel.
+`agent_whoami` and `agents_list` return `has_cursor_key` as a boolean only.
 
 - **Agent target:** enqueue one private delivery to that agent (inbox webhook, or
   the Grok Bot session API when `grokbot_agent_name` is set). No member-list fanout.
@@ -306,8 +315,9 @@ presentation changes; transport, credentials, session selection and retry IDs do
 
 ## Authenticated tool profiles (v0.6.15)
 
-- Anonymous discovery or an authenticated connection with no header or OAuth
-  session identity returns the full thirteen-tool catalog. Listing a write tool does
+- Anonymous discovery with no header returns the full public catalog. An
+  authenticated connection with no registered identity is bootstrap: it omits
+  `telegram_*`, `human_register`, and `cursor_key_*`. Listing a write tool does
   not authorize calling it: `tools/call` still requires valid authentication.
   Agent-scoped tools require `agent_token` on the call, or the `X-MCP-Agent-ID`
   fallback. API-key Grok Bots pass `agent_token` rather than requiring
@@ -352,8 +362,9 @@ remains `{text,messageId}`; there is no claim of a configurable `user` role.
 No credentials, grants, bot delivery mechanics, or event subscriptions change.
 
 For read-only discovery diagnosis, `agent_whoami` returns `server_version`,
-`tool_profile`, and `available_tool_names` from the same current tool-selection
-function as `tools/list`. Compare that runtime answer with the client's catalog;
+`tool_profile`, `has_cursor_key`, and `available_tool_names` from the same current tool-selection
+function as `tools/list`. Unregistered whoami also returns `next_step` plus a
+`/setup.md` link. Compare that runtime answer with the client's catalog;
 no credentials or permissions are changed, and a mismatched list alone does not
 identify the cause.
 
