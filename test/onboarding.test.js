@@ -6,7 +6,7 @@ import {App,handler} from '../src/app.js';
 import {createEntrypoint} from '../api/index.js';
 import {SETUP_GUIDE} from '../src/landing.js';
 import {registerAgent,resolveCallerAgent} from '../src/agents.js';
-import {BOOTSTRAP_EXCLUDED,unregisteredNextStep} from '../src/onboarding.js';
+import {BOOTSTRAP_EXCLUDED,unregisteredNextStep,toolDescription} from '../src/onboarding.js';
 import {INSTANCE_ID} from '../src/config.js';
 async function request(serve,method='GET',headers={},rpc){
  const req=Readable.from(rpc?[JSON.stringify(rpc)]:[]);Object.assign(req,{url:'/mcp',method,headers});
@@ -99,4 +99,16 @@ test('missing grokbot_agent_name warns; whitespace-padded tokens are accepted',a
  assert.equal(padded.handle,'shu1');assert.equal(padded.agent_token,undefined);
  const listed=await app.rpc(INSTANCE_ID,'tools/list',{},root);
  for(const name of BOOTSTRAP_EXCLUDED)assert(!listed.tools.map(t=>t.name).includes(name),name);
+});
+test('every messages_send description variant keeps credential and limit safety text',()=>{
+ for(const botType of ['grokbot','dot','muse','webhook',null]){
+  const description=toolDescription('messages_send',botType);
+  assert.match(description,/Never include credentials/,String(botType));
+  assert.match(description,/Requires owner authorization/,String(botType));
+  assert.match(description,/2 MiB/,String(botType));
+  assert.match(description,/24 hours/,String(botType));
+  assert.match(description,/actual recipient/,String(botType));
+  assert.match(description,/1024/,String(botType));
+  assert.match(description,/bound bot/,String(botType));
+ }
 });
