@@ -9,7 +9,7 @@ import {hash,seal,unseal,signedHeaders,publicAddress,signingKey} from '../src/se
 import {telegramHumanAllowed} from '../src/telegram-policy.js';
 const published=tools.map(t=>t.name);
 const bootstrap=published.filter(n=>!BOOTSTRAP_EXCLUDED.includes(n));
-const bootstrapWhoami=(botType=null,names=bootstrap)=>({registered:false,agent_id:null,next_step:unregisteredNextStep(botType),server_version:'0.6.24',tool_profile:'bootstrap',available_tool_names:names,has_cursor_key:false});
+const bootstrapWhoami=(botType=null,names=bootstrap)=>({registered:false,agent_id:null,next_step:unregisteredNextStep(botType),server_version:'0.6.25',tool_profile:'bootstrap',available_tool_names:names,has_cursor_key:false});
 import {Readable} from 'node:stream';
 class MemoryStore {
  constructor(){this.data=new Map();this.locks=new Map();}
@@ -447,7 +447,7 @@ test('whoami diagnostics use the same tool selection as authenticated discovery 
  const f=await profileFixture();
  for(const [headers,profile] of [[{authorization:'Bearer oauth-dot'},'dot'],[{authorization:'Bearer oauth-bot'},'bot'],[{authorization:'Bearer oauth-fresh'},'bootstrap'],[{authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'},'bot']]){
   const before=structuredClone([...f.store.data]);const result=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{}},headers)).body).result.structuredContent;
-  assert.equal(result.server_version,'0.6.24');assert.equal(result.tool_profile,profile);
+  assert.equal(result.server_version,'0.6.25');assert.equal(result.tool_profile,profile);
   assert.equal(result.has_cursor_key,false);
   if(profile==='bootstrap')assert.match(result.next_step,/setup\.md/);
   assert.deepEqual(result.available_tool_names,profileNames(await profileRpc(f.app,'tools/list',{},headers)));
@@ -669,7 +669,7 @@ test('modern production discovery and fresh OAuth tools use stateless envelopes 
  }
  assert.equal((await request('tools/list',{}, {origin:f.app.origin})).statusCode,200);
  for(const method of ['initialize','ping']){const rejected=await request(method);assert.equal(rejected.statusCode,404);assert.equal(rejected.value.error.code,-32601);}
- const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.24');
+ const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.25');
  const auth={authorization:'Bearer oauth-fresh'};
  const fresh=await request('tools/list',{},auth);assert.equal(fresh.value.result.tools.length,bootstrap.length);assert.equal(fresh.value.result.resultType,'complete');
  const who=await request('tools/call',{name:'agent_whoami',arguments:{}},auth);assert.equal(who.value.result.structuredContent.registered,false);assert.equal(who.value.result.resultType,'complete');
@@ -714,7 +714,7 @@ test('Streamable HTTP GET is an SSE stream and POST honors Accept event-stream',
  assert.equal(notice.statusCode,202);assert.equal(notice.body??'','');
  const who=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{...accept,'mcp-protocol-version':'2025-06-18'});
  assert.equal(who.statusCode,200);assert.equal(who.headers['Content-Type'],'text/event-stream');
- const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.24');
+ const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.25');
  const jsonWho=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{authorization:'Bearer '+instanceKey,'mcp-protocol-version':'2025-06-18','accept':'application/json'});
  assert.equal(jsonWho.headers['Content-Type'],'application/json');assert.equal(JSON.parse(jsonWho.body).result.structuredContent.registered,false);
 });
