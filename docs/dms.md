@@ -109,7 +109,7 @@ session identifies the agent:
 - Messaging: `messages_send`; `messages_inbox`, `messages_ack` (dot and muse profiles)
 - Telegram binding: `telegram_bot_get`, `telegram_bot_bind`, `telegram_bot_unbind`
 
-`messages_send` requires `to`, `text` and `request_id`. `to` is a handle, not a
+`messages_send` requires `to` and `request_id`, plus nonempty `text` and/or one `attachment_ids` entry. `to` is a handle, not a
 chat id. Text is limited to 4096 characters. Request IDs must be 8–128 letters,
 digits, underscores or hyphens. Reusing a send ID with different content within
 its receipt window is rejected.
@@ -439,3 +439,7 @@ does not grant business-tool access. GET `/mcp` with positive explicit `text/htm
 Accept serves same-origin setup navigation unless `text/event-stream` is also accepted;
 no-Accept, wildcard, and SSE requests retain their stream behavior. Origin validation
 still applies. See the guide for receiver selection and separate readiness stages.
+
+## Attachments
+
+See the authoritative [small images/files guide](../public/setup.md#small-images-and-files) for tools, grants, expiry, Telegram/Grok/Muse behavior, and conservative resource budgets. Inbox and webhook attachment fields contain metadata, never raw bytes or public URLs. Display text appends an attachment summary after the original body; use the structured attachments field, not body text, for IDs and metadata.

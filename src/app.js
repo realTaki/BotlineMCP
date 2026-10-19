@@ -3,6 +3,7 @@ import {tryLanding,tryMcpGuide,SETUP_GUIDE} from './landing.js';
 import {INSTANCE_ID} from './config.js';
 import {authenticatePrincipal,oauth} from './oauth.js';
 import {registerAgent,listAgents,getAgent,resolveCallerAgent,rotateAgentToken,callerTokenProperty} from './agents.js';
+import {Attachments,attachmentTools,ATTACHMENT_POLICY} from './attachments.js';
 import {Dms,dmTools,dmEvents} from './dms.js';
 import {isDotInboxAgent} from './dot-inbox.js';
 import {isMuseAgent} from './muse-inbox.js';
@@ -42,6 +43,7 @@ export const tools=[
   {name:'agents_list',description:'List logical agents in this owner’s private relay. These are routing identities within shared instance authority. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:true}},
   {name:'human_register',description:'Register a human with one confirmed Telegram user ID, unique across human handles. agent_token identifies you. human is the human handle. Call it once; that human may DM every bound bot. Actual changes to existing humans require a five-minute code sent to exactly one existing different-type agent. Repeat identical arguments with challenge_id and confirmation_code; that agent must show the code only to the human, never relay it directly. Identical requests and first registration do not need a code. This depends on agent compliance, not server-guaranteed human approval. ID replacement also requires replace_telegram_user_id equal to the current ID. Requires explicit human identity confirmation. Does not create credentials and does not enroll per bot. Read human mappings through telegram_bot_get. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty,challenge_id:{type:'string',description:'Returned challenge ID for an existing-human change.'},confirmation_code:{type:'string',description:'One-use code obtained by the human from the other-type agent, valid for five minutes. Never retrieve it automatically from another agent.'},human:{type:'string',minLength:2,maxLength:64,description:'Human handle to register.'},display_name:{type:'string',maxLength:128},telegram_user_id:{type:'string',pattern:'^[1-9][0-9]*$'},replace_telegram_user_id:{type:'string',pattern:'^[1-9][0-9]*$'}},['human','telegram_user_id']),annotations:{readOnlyHint:false,idempotentHint:true}},
   ...dmTools,
+  ...attachmentTools,
   {name:'telegram_bot_get',description:'Read the current handle’s single Telegram bot, connection state and the shared humans registry. Reports unregistered, unbound or ambiguous state without selecting another handle’s bot. Pass your agent_token.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:true}},
   {name:'agent_whoami',description:'Read your registered agent identity, or registered:false when this authenticated connection has no agent identity. Pass your agent_token. Agents are peers; no admin role exists. Includes server_version, tool_profile and available_tool_names from the current server-side tool selection for read-only discovery diagnostics.',inputSchema:schema({agent_token:callerTokenProperty},[]),annotations:{readOnlyHint:true}},
   {name:'telegram_bot_bind',description:'Bind with a new token, or use existing_bot_id to migrate/repair an existing same-instance bot without exposing its stored credential. Exactly one credential source is required. Unassigned or current-handle bots only; never take another handle’s bot. Existing-bot mode preserves legacy listeners and uses the stored token. Rebind still rotates the token when a new token is provided. Preferred binding and recovery path: the agent securely retains its own bot token and calls this tool with owner authorization. BotlineMCP encrypts a working copy and registers the webhook, but database loss or lost keys can make it unrecoverable. Keep token and recovery configuration outside BotlineMCP. Registered humans can DM every bound bot. Link-only forms are disabled. If secure credential handling is unavailable, report that specific client limitation rather than making all users follow a form workflow. Pass your agent_token.',inputSchema:bindSchema,annotations:{readOnlyHint:false,openWorldHint:true}},
@@ -116,12 +118,14 @@ export class App {
     }
     if(['invite_create','invite_list','invite_revoke','agent_list','agent_disable'].includes(name))requireThat(false,'Invitations and per-agent accounts are retired; use the instance key.',410);
     if(['telegram_whitelist_update','bot_access_update','bot_access_get'].includes(name))requireThat(false,'Per-bot allowlists are retired; use human_register.',410);
-    if(name==='agent_whoami'){const agent=principal.agentId?await getAgent(this,owner,principal.agentId):null;const available_tool_names=(await this.availableTools(principal,botType)).map(t=>t.name),tool_profile=!principal.agentId?'bootstrap':isMuseAgent(agent)?'muse':available_tool_names.includes('messages_inbox')?'dot':'bot';return {...(agent?{registered:true,...agent}:{registered:false,agent_id:null}),server_version:'0.6.22',tool_profile,available_tool_names};}
+    if(name==='agent_whoami'){const agent=principal.agentId?await getAgent(this,owner,principal.agentId):null;const available_tool_names=(await this.availableTools(principal,botType)).map(t=>t.name),tool_profile=!principal.agentId?'bootstrap':isMuseAgent(agent)?'muse':available_tool_names.includes('messages_inbox')?'dot':'bot';return {...(agent?{registered:true,...agent}:{registered:false,agent_id:null}),server_version:'0.6.23',tool_profile,available_tool_names};}
     if(name==='agent_register')return registerAgent(this,principal,args,{botType});
     if(name==='agent_token_rotate')return rotateAgentToken(this,principal);
     if(name==='cursor_key_set')return setCursorKey(this,principal,args);
     if(name==='cursor_key_clear')return clearCursorKey(this,principal);
     if(name==='agents_list')return {agents:await listAgents(this,owner)};
+    if(name==='attachments_upload')return new Attachments(this).upload(principal,args);
+    if(name==='attachments_read')return new Attachments(this).read(principal,args.attachment_id);
     if(dmTools.some(t=>t.name===name))return new Dms(this).invoke(principal,name,args);
     if(name==='bot_list')return new BotBindings(this).list(owner);
     if(name==='bot_begin_binding')requireThat(false,'Link-only binding has been retired. Use authenticated bot_bind.',410);
@@ -131,17 +135,25 @@ export class App {
     if(name==='__delivery_retry_internal') {await this.dispatch(owner);await new Dms(this).dispatch(owner);const telegram_pending=(await this.store.list('delivery',owner)).filter(d=>d.state==='pending').length,dm_pending=(await this.store.list('group_delivery',owner)).filter(d=>d.state==='pending').length;return {pending:telegram_pending+dm_pending,telegram_pending,dm_pending};}
     requireThat(name==='telegram_send_message','Unknown tool',404);
     requireThat(!(await this.store.get('group_bot',args.bot_id)),'Use messages_send for this bound bot',410);
+    requireThat(!['attachment_id','attachment_principal','attachmentPayload'].some(k=>Object.hasOwn(args,k)),'Use messages_send for attachments',400);
     return this.sendTelegram(owner,args);
   }
   async sendTelegram(owner,args) {
     const bot=await this.own(owner,args.bot_id);
     requireThat(bot.active&&telegramHumanAllowed(await listHumans(this,owner),args.chat_id),'Chat not allowed',403);
-    requireThat(typeof args.text==='string'&&args.text.length>0&&args.text.length<=4096&&typeof args.request_id==='string'&&/^[\w-]{8,128}$/.test(args.request_id),'Invalid message or request_id');
-    const id=hash(`${owner}:${args.request_id}`), fingerprint=hash(JSON.stringify([bot.id,args.chat_id,args.text]));
+    requireThat(typeof args.text==='string'&&(args.text.length>0||args.attachment_id)&&args.text.length<=(args.attachment_id?1024:4096)&&typeof args.request_id==='string'&&/^[\w-]{8,128}$/.test(args.request_id),'Invalid message or request_id');
+    const id=hash(`${owner}:${args.request_id}`), fingerprint=hash(JSON.stringify([bot.id,args.chat_id,args.text,...(args.attachment_id?[args.attachment_id]:[])]));
     if(!await this.store.insert('send',id,{owner,fingerprint,state:'uncertain',created:Date.now()})) {
       const prev=await this.store.get('send',id);requireThat(prev.fingerprint===fingerprint,'request_id reused for different content',409);return prev.result??{status:'uncertain',instruction:'Check Telegram manually; do not resend with a new request_id.'};
     }
-    const message=await this.telegram(this.decrypt(bot.token),'sendMessage',{chat_id:args.chat_id,text:args.text});
+    let message;
+    if(args.attachment_id){
+      await new Attachments(this).inspect(args.attachment_principal,args.attachment_id);
+      const {record,bytes}=args.attachmentPayload;
+      const image=record.mime.startsWith('image/'),method=image?'sendPhoto':'sendDocument',field=image?'photo':'document';
+      const form=new FormData();form.set('chat_id',args.chat_id);if(args.text)form.set('caption',args.text);form.set(field,new Blob([bytes],{type:record.mime}),record.name);
+      try{const response=await (this.attachmentFetch??fetch)('https://api.telegram.org/bot'+this.decrypt(bot.token)+'/'+method,{method:'POST',body:form,redirect:'error',signal:AbortSignal.timeout(15000)});const body=await response.json();requireThat(response.ok&&body.ok,'Telegram media send failed');message=body.result;}catch{return {status:'uncertain',instruction:'Attachment send outcome uncertain; check Telegram manually. Reuse request_id; never retry with a new ID.'};}
+    }else message=await this.telegram(this.decrypt(bot.token),'sendMessage',{chat_id:args.chat_id,text:args.text});
     const result={status:'sent',message_id:String(message.message_id)};await this.store.put('send',id,{owner,fingerprint,state:'sent',result,created:Date.now()});return result;
   }
   subIdentity(owner,p) {
@@ -213,7 +225,7 @@ export class App {
     if(method==='tools/call') {
       requireThat(tools.some(t=>t.name===p.name)||p.name==='telegram_send_message','Unknown or retired tool',404);
       if(p.name!=='telegram_send_message')requireThat((await this.availableTools(principal)).some(t=>t.name===p.name),'Tool is unavailable for this agent profile; refresh tools/list after registration or identity changes',403);
-      const r=await this.invoke(owner,p.name,p.arguments,principal,botType);return {content:[{type:'text',text:JSON.stringify(r)}],structuredContent:r};
+      const r=await this.invoke(owner,p.name,p.arguments,principal,botType);if(p.name==='attachments_read')return r;return {content:[{type:'text',text:JSON.stringify(r)}],structuredContent:r};
     }
     throw Object.assign(new Error('Method not found'),{rpcCode:-32601});
   }
@@ -224,7 +236,7 @@ export class App {
     if(update.my_chat_member)return true;
     const humans=await listHumans(this,bot.owner);
     const m=update.message,positive=id=>Number.isSafeInteger(id)&&id>0;
-    if(!m||typeof m.from?.is_bot!=='boolean'||!positive(m.from?.id)||!Number.isSafeInteger(m.chat?.id)||m.chat.id===0||!positive(m.message_id)||typeof m.text!=='string'||!m.text.length||!Number.isSafeInteger(m.date)||m.date<0||!Number.isFinite(new Date(m.date*1000).getTime())||!['private','group','supergroup'].includes(m.chat.type))return true;
+    if(!m||typeof m.from?.is_bot!=='boolean'||!positive(m.from?.id)||!Number.isSafeInteger(m.chat?.id)||m.chat.id===0||!positive(m.message_id)||!(typeof m.text==='string'&&m.text.length||m.photo||m.document||m.video||m.audio||m.voice||m.sticker||m.animation)||!Number.isSafeInteger(m.date)||m.date<0||!Number.isFinite(new Date(m.date*1000).getTime())||!['private','group','supergroup'].includes(m.chat.type))return true;
     if(m.chat.type!=='private')return true;
     const senderId=String(m.from.id),chatId=String(m.chat.id),receiptId=`${botId}:${update.update_id}`;
     const existing=await this.store.get('update',receiptId);
@@ -254,7 +266,7 @@ export class App {
     // First persist receipt+its subscription snapshot so a crash/retry cannot add subscribers retroactively.
     if(!existing) {
       const subs=(await this.store.list('subscription',bot.owner)).filter(s=>s.botId===botId&&s.expires>Date.now()&&(!s.chatId||s.chatId===String(m.chat.id)));
-      const event={eventId:`tg_${botId}_${update.update_id}`,name:'telegram.message',timestamp:new Date(m.date*1000).toISOString(),data:{bot_id:botId,chat_id:String(m.chat.id),message_id:String(m.message_id),sender_id:String(m.from.id),sender_name:[m.from.first_name,m.from.last_name].filter(Boolean).join(' '),text:m.text},cursor:null};
+      const event={eventId:`tg_${botId}_${update.update_id}`,name:'telegram.message',timestamp:new Date(m.date*1000).toISOString(),data:{bot_id:botId,chat_id:String(m.chat.id),message_id:String(m.message_id),sender_id:String(m.from.id),sender_name:[m.from.first_name,m.from.last_name].filter(Boolean).join(' '),text:m.text??((m.caption??'')+'\n[Attachment unsupported on legacy Telegram subscriptions; register and bind an agent handle.]')},cursor:null};
       await this.store.insert('update',receiptId,{owner:bot.owner,event,subscriptionIds:subs.map(s=>s.id),created:Date.now()});
     }
     const receipt=await this.store.get('update',receiptId);
@@ -304,7 +316,7 @@ export function handler(app) {
     if(path==='/settings'||path.startsWith('/settings/'))return await settings(app,req,path,readBody,send,res);
     if(path.startsWith('/oauth/')||path.startsWith('/.well-known/')) return await oauth(app,req,path,readBody,send,res);
     if(path==='/agents/redeem')return send(410,{error:'Invitations are retired. Connect with the instance key.'});
-    if(path==='/health')return send(200,{service:'BotlineMCP',status:'configured',version:'0.6.22'});
+    if(path==='/health')return send(200,{service:'BotlineMCP',status:'configured',version:'0.6.23'});
     if(path==='/bind')return send(410,{error:'Link-only binding has been retired. Use authenticated MCP bot_bind.'});
     if(path.startsWith('/telegram/')&&req.method==='POST') {
       const update=JSON.parse(await readBody(req,262144)),botId=path.slice(10),secret=req.headers['x-telegram-bot-api-secret-token'];let done;
@@ -320,7 +332,7 @@ export function handler(app) {
     if(req.headers.origin!==undefined)requireThat(req.headers.origin===app.origin,'Origin mismatch',403);
     if(req.method==='GET'){if(tryMcpGuide(req,res))return;return writeGetSse(res,req);}
     if(req.method!=='POST'){res.setHeader('Allow','GET, POST');requireThat(false,'Only GET and POST supported',405);}
-    const rpc=JSON.parse(await readBody(req));
+    const rpc=JSON.parse(await readBody(req,ATTACHMENT_POLICY.requestBytes));
     req.protocolMessage=rpc;
     if(rpc?.jsonrpc==='2.0'&&typeof rpc.method==='string'&&rpc.id===undefined&&!Array.isArray(rpc)&&rpc.method.startsWith('notifications/')){res.statusCode=202;return res.end();}
     if(usesModernEnvelope(req,rpc)){if(!prepareProtocol(req,res,rpc))return;}

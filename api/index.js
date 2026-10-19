@@ -2,6 +2,7 @@ import {prepareProtocol,instrumentProtocol,usesModernEnvelope,writeGetSse,writeM
 import {configuration} from '../src/config.js';
 import { App,handler,readBody } from '../src/app.js';
 import {tryLanding,tryMcpGuide} from '../src/landing.js';
+import {ATTACHMENT_POLICY} from '../src/attachments.js';
 import { Store } from '../src/store.js';
 export function createEntrypoint(createService=()=>{
  const config=configuration(process.env),store=new Store(config.databaseUrl);
@@ -19,7 +20,7 @@ export function createEntrypoint(createService=()=>{
  // Only identity-free discovery may bypass the configured handler.
  if(req.method==='POST'&&path==='/mcp'){
   try{
-   req.body=JSON.parse(await readBody(req));
+   req.body=JSON.parse(await readBody(req,ATTACHMENT_POLICY.requestBytes));
    req.protocolMessage=req.body;
    if(req.body?.jsonrpc==='2.0'&&typeof req.body.method==='string'&&req.body.id===undefined&&!Array.isArray(req.body)&&req.body.method.startsWith('notifications/')){res.statusCode=202;return res.end();}
    if(usesModernEnvelope(req,req.body)){

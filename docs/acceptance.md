@@ -94,3 +94,19 @@ It checks anonymous discovery instructions and anonymous business-tool rejection
 and that hosted/self-host instructions share the canonical public guide. These are
 local mocked checks, not live registration, credential entry, receiver subscription,
 paid provisioning or message acceptance. Validate those only with explicit authorization.
+
+
+## Small attachment release verification
+
+Offline PGlite tests exercise the real Store tables/transactions and encrypted
+bytea storage, actual 2 MiB production MCP request parsing and native image/blob
+results, recipient-only grants, ACK/expiry behavior, source-human/binding revocation,
+quota reservations under concurrency, and rollback of grants on failed enqueue.
+Synthetic Telegram mocks cover safe getFile paths, stream bounds, duplicate webhook
+ingestion, multipart sends and uncertain outcomes without automatic resend. The
+Muse CLI tests save synthetic bytes, verify integrity, and refuse overwrite.
+
+These tests do not send actual Telegram photos/documents, contact external agents,
+validate every MCP client's image rendering/download UI, or establish the production
+provider plan/remaining billing allowance. Production checks are public read-only
+version/discovery checks; real attachment delivery requires separate user permission.

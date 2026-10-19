@@ -9,7 +9,7 @@ export const DOT_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,m
 // A Cursor-configured recipient always retains its existing delivery path.
 export const isDotInboxAgent=agent=>agent?.handle==='dot'&&!agent.grokbot_agent_name&&!agent.grokbotAgentName;
 const identity=p=>({kind:p.kind,id:p.id,platform:senderPlatform(p),...(p.handle?{handle:p.handle}:{})});
-const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
+const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),...(data.attachments?{attachments:data.attachments}:{}),...(data.attachment_error?{attachment_error:data.attachment_error}:{}),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
 export class DotInbox {
  constructor(app){this.app=app;this.store=app.store;}
  async actor(p,store=this.store){
@@ -21,7 +21,7 @@ export class DotInbox {
   const messages=(await tx.list('dot_inbox',owner)).filter(d=>d.agentId===agentId);
   requireThat(messages.length<DOT_INBOX_POLICY.maxMessages,'Dot inbox capacity reached; retry after ACK or expiry',503);
   const wake=await tx.get('dot_wake',agentId),sequence=(wake?.sequence??0)+1;
-  await tx.insert('dot_inbox',hash(`${event.eventId}:${agentId}`),{owner,agentId,event,sequence,expires:Date.now()+DOT_INBOX_POLICY.payloadTtl});
+  await tx.insert('dot_inbox',hash(`${event.eventId}:${agentId}`),{owner,agentId,event,sequence,expires:Math.min(Date.now()+DOT_INBOX_POLICY.payloadTtl,...(event.data.attachments??[]).map(a=>Date.parse(a.expires_at)))});
   // New traffic reopens exhausted retries, but does not defeat burst coalescing.
   await tx.put('dot_wake',agentId,{...wake,owner,agentId,sequence,wakeId:null,attempts:0,next:!messages.length||wake?.exhausted?0:wake?.next??0,exhausted:false});
  }

@@ -42,7 +42,15 @@ export class Store {
     finally {client.release();}
   }
   constructor(url) { this.pool = new pg.Pool({connectionString:url,max:3,connectionTimeoutMillis:5000,idleTimeoutMillis:10000}); }
-  async initialize() { await this.pool.query('CREATE TABLE IF NOT EXISTS mcp_records (kind text NOT NULL, id text NOT NULL, value jsonb NOT NULL, PRIMARY KEY(kind,id))'); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_owner ON mcp_records (kind, (value->>'owner'))"); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_denied_expiry ON mcp_records (((value->>'expires')::bigint)) WHERE kind='denied_limit' OR (kind='update' AND value->>'denied'='true')"); await this.pruneDeniedReplies(); }
+  async initialize() { await this.pool.query('CREATE TABLE IF NOT EXISTS mcp_records (kind text NOT NULL, id text NOT NULL, value jsonb NOT NULL, PRIMARY KEY(kind,id))'); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_owner ON mcp_records (kind, (value->>'owner'))"); await this.pool.query("CREATE INDEX IF NOT EXISTS mcp_records_denied_expiry ON mcp_records (((value->>'expires')::bigint)) WHERE kind='denied_limit' OR (kind='update' AND value->>'denied'='true')"); await this.pool.query('CREATE TABLE IF NOT EXISTS mcp_attachments (id text PRIMARY KEY, owner text NOT NULL, expires bigint NOT NULL, metadata jsonb NOT NULL, body bytea NOT NULL)'); await this.pool.query('CREATE INDEX IF NOT EXISTS mcp_attachments_expiry ON mcp_attachments (expires)'); await this.pruneAttachments(Date.now()); await this.pruneDeniedReplies(); }
+  async pruneAttachments(now){
+    await this.pool.query('DELETE FROM mcp_attachments WHERE expires <= $1',[now]);
+    await this.pool.query("DELETE FROM mcp_records WHERE kind IN ('attachment_grant','attachment_upload','attachment_reads','attachment_ingest') AND (value->>'expires')::bigint <= $1",[now]);
+  }
+  async getAttachment(id){return (await this.pool.query('SELECT metadata FROM mcp_attachments WHERE id=$1',[id])).rows[0]?.metadata;}
+  async getAttachmentBody(id){return (await this.pool.query('SELECT body FROM mcp_attachments WHERE id=$1 AND expires>$2',[id,Date.now()])).rows[0]?.body;}
+  async putAttachment(r,body){await this.pool.query('INSERT INTO mcp_attachments(id,owner,expires,metadata,body) VALUES($1,$2,$3,$4,$5)',[r.id,r.owner,r.expires,r,body]);}
+  async attachmentStoredBytes(owner){return Number((await this.pool.query('SELECT COALESCE(sum(octet_length(body)),0) AS size FROM mcp_attachments WHERE owner=$1',[owner])).rows[0].size);}
   async get(kind, id) { return (await this.pool.query('SELECT value FROM mcp_records WHERE kind=$1 AND id=$2',[kind,id])).rows[0]?.value; }
   async put(kind,id,value) { await this.pool.query('INSERT INTO mcp_records(kind,id,value) VALUES($1,$2,$3) ON CONFLICT(kind,id) DO UPDATE SET value=EXCLUDED.value',[kind,id,value]); }
   async insert(kind,id,value) { return (await this.pool.query('INSERT INTO mcp_records(kind,id,value) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id',[kind,id,value])).rowCount === 1; }

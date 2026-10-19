@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
+import base64
+import hashlib
 
 spec = importlib.util.spec_from_file_location('muse_poll', Path(__file__).parents[1] / 'clients/muse/muse-poll.py')
 m = importlib.util.module_from_spec(spec)
@@ -76,5 +79,28 @@ class PollTests(unittest.TestCase):
         args.request_id=None
         with self.assertRaises(m.McpError):m.cmd_send(c,args)
         self.assertEqual(len(c.calls),2)
+
+class AttachmentTests(unittest.TestCase):
+    def test_native_download_and_upload_roundtrip(self):
+        data=b"synthetic file bytes"
+        metadata={"attachment_id":"att_test", "size":len(data), "sha256":hashlib.sha256(data).hexdigest()}
+        class Files:
+            def call_tool(self, name, args, native=False):
+                if name=="attachments_read":
+                    assert native
+                    return {"structuredContent":metadata,"content":[{"type":"resource","resource":{"blob":base64.b64encode(data).decode()}}]}
+                assert base64.b64decode(args["data"])==data
+                return metadata
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()):
+            path=Path(folder)/"download.bin"
+            args=SimpleNamespace(token="synthetic",id="att_test",output=str(path))
+            m.cmd_download(Files(),args)
+            self.assertEqual(path.read_bytes(),data)
+            with self.assertRaises(FileExistsError):m.cmd_download(Files(),args)
+            m.cmd_upload(Files(),SimpleNamespace(token="synthetic",file=str(path),request_id="upload_test"))
+            metadata["sha256"]="bad"
+            args.output=str(Path(folder)/"wrong")
+            with self.assertRaises(m.McpError):m.cmd_download(Files(),args)
+            self.assertFalse(Path(args.output).exists())
 
 unittest.main()
