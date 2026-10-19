@@ -266,8 +266,8 @@ def cmd_download(client, args):
     result = client.call_tool("attachments_read", {"agent_token": args.token,
         "attachment_id": args.id}, native=True)
     metadata = result.get("structuredContent", {})
-    blobs = [b.get("data") if b.get("type") == "image" else b.get("resource", {}).get("blob")
-             for b in result.get("content", []) if b.get("type") in ("image", "resource")]
+    blobs = [b.get("data") if b.get("type") in ("image", "audio") else b.get("resource", {}).get("blob")
+             for b in result.get("content", []) if b.get("type") in ("image", "audio", "resource")]
     if len(blobs) != 1 or not isinstance(blobs[0], str) or len(blobs[0]) > 2796204:
         raise McpError("invalid attachment response")
     try:

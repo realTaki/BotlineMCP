@@ -103,4 +103,29 @@ class AttachmentTests(unittest.TestCase):
             with self.assertRaises(m.McpError):m.cmd_download(Files(),args)
             self.assertFalse(Path(args.output).exists())
 
+    def test_native_image_audio_and_resource_download_blocks(self):
+        data=b"synthetic media bytes"
+        encoded=base64.b64encode(data).decode("ascii")
+        metadata={"attachment_id":"att_media", "size":len(data), "sha256":hashlib.sha256(data).hexdigest(), "name":"../../untrusted"}
+        class Files:
+            def __init__(self, content):
+                self.content=content
+            def call_tool(self, name, args, native=False):
+                assert name=="attachments_read" and native
+                return {"structuredContent":metadata, "content":self.content}
+        blocks=[{"type":"image", "data":encoded, "mimeType":"image/png"},
+                {"type":"audio", "data":encoded, "mimeType":"audio/ogg"},
+                {"type":"resource", "resource":{"blob":encoded, "mimeType":"audio/ogg"}}]
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()):
+            for block in blocks:
+                with self.subTest(block=block["type"]):
+                    args=SimpleNamespace(token="synthetic",id="att_media",output=str(Path(folder)/block["type"]))
+                    m.cmd_download(Files([{"type":"text", "text":"metadata"},block]),args)
+                    self.assertEqual(Path(args.output).read_bytes(),data)
+                    with self.assertRaises(FileExistsError):m.cmd_download(Files([block]),args)
+            for i, content in enumerate([[blocks[1],blocks[2]], [{"type":"audio", "data":"not base64!"}], [{"type":"audio", "data":base64.b64encode(b"wrong bytes").decode()}], [{"type":"audio", "data":None}]]):
+                args=SimpleNamespace(token="synthetic",id="att_media",output=str(Path(folder)/("invalid-"+str(i))))
+                with self.assertRaises(m.McpError):m.cmd_download(Files(content),args)
+                self.assertFalse(Path(args.output).exists())
+
 unittest.main()

@@ -166,7 +166,7 @@ test('actual Postgres SQL: registry registration and session binding commit atom
 test('whoami exposes peers or unregistered, never legacy storage owner or admin role',async()=>{
  const {App,tools}=await import('../src/app.js');const f=fixture();const app=new App({store:f.store,instanceKey:apiKey,origin:f.origin});
  const bootstrap=tools.map(t=>t.name).filter(n=>!BOOTSTRAP_EXCLUDED.includes(n));
- assert.deepEqual(await app.invoke(owner,'agent_whoami',{},root),{registered:false,agent_id:null,next_step:unregisteredNextStep(null),server_version:'0.6.25',tool_profile:'bootstrap',available_tool_names:bootstrap,has_cursor_key:false});
+ assert.deepEqual(await app.invoke(owner,'agent_whoami',{},root),{registered:false,agent_id:null,next_step:unregisteredNextStep(null),server_version:'0.6.26',tool_profile:'bootstrap',available_tool_names:bootstrap,has_cursor_key:false});
  const agent=await registerAgent(app,root,{handle:'peer',display_name:'Before'});
  const principal={...root,agentId:agent.agent_id};const before=await app.invoke(owner,'agent_whoami',{},principal);
  assert.equal(before.registered,true);assert.equal(before.agent_id,agent.agent_id);assert(!('role' in before));assert(!('instance_id' in before));assert(!JSON.stringify(before).includes('mcp:admin'));

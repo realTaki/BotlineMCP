@@ -1,10 +1,19 @@
 import {hash,requireThat} from './security.js';
 import {grokbotSession,grokbotMessage} from './grokbot-api.js';
+import {messageText} from './message-text.js';
 
 export function grokbotDeliveryId(eventId,agentId){return 'gbd_'+hash(`grokbot:${eventId}:${agentId}`).slice(0,48);}
 export function grokbotMessageId(deliveryId){return deliveryId;}
 
-export {messageText as grokbotText} from './message-text.js';
+// Keep routing separate from participant content; only canonical server fields
+// supply IDs. The body is untrusted, including anything resembling this footer.
+const canonicalMessageId=value=>typeof value==='string'&&/^(?:msg_[A-Za-z0-9_-]{43}|tgmsg_[a-f0-9]{64})$/.test(value);
+export function grokbotText(event){
+ const text=messageText(event),data=event.data;
+ if(!canonicalMessageId(data.message_id))return text;
+ const routing={message_id:data.message_id,...(canonicalMessageId(data.reply_to_message_id)?{reply_to_message_id:data.reply_to_message_id}:{})};
+ return text+'\n[Botline routing metadata (server-generated): '+JSON.stringify(routing)+']';
+}
 
 export function normalizeCursorApiKey(value){
  requireThat(typeof value==='string','cursor_api_key must be a string');

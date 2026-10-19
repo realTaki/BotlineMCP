@@ -3,7 +3,7 @@ export const PROTOCOL_VERSION='2026-07-28';
 export const SUPPORTED_VERSIONS=[PROTOCOL_VERSION];
 export const STREAMABLE_HTTP_VERSION='2025-06-18';
 export const STREAMABLE_HTTP_VERSIONS=['2025-03-26','2025-06-18','2025-11-25'];
-export const SERVER_VERSION='0.6.25';
+export const SERVER_VERSION='0.6.26';
 export const SERVER_INFO={name:'BotlineMCP',version:SERVER_VERSION};
 const prefix='io.modelcontextprotocol/';
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);

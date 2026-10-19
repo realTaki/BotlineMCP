@@ -126,7 +126,7 @@ export class App {
     if(name==='cursor_key_clear')return clearCursorKey(this,principal);
     if(name==='agents_list')return {agents:await new Dms(this).listSendable(principal),has_cursor_key:await hasCursorKey(this,owner)};
     if(name==='attachments_upload')return new Attachments(this).upload(principal,args);
-    if(name==='attachments_read')return new Attachments(this).read(principal,args.attachment_id);
+    if(name==='attachments_read')return new Attachments(this).read(principal,args.attachment_id,args.format);
     if(dmTools.some(t=>t.name===name))return new Dms(this).invoke(principal,name,args);
     if(name==='bot_list')return new BotBindings(this).list(owner);
     if(name==='bot_begin_binding')requireThat(false,'Link-only binding has been retired. Use authenticated bot_bind.',410);
@@ -136,26 +136,28 @@ export class App {
     if(name==='__delivery_retry_internal') {await this.dispatch(owner);await new Dms(this).dispatch(owner);const telegram_pending=(await this.store.list('delivery',owner)).filter(d=>d.state==='pending').length,dm_pending=(await this.store.list('group_delivery',owner)).filter(d=>d.state==='pending').length;return {pending:telegram_pending+dm_pending,telegram_pending,dm_pending};}
     requireThat(name==='telegram_send_message','Unknown tool',404);
     requireThat(!(await this.store.get('group_bot',args.bot_id)),'Use messages_send for this bound bot',410);
-    requireThat(!['attachment_id','attachment_principal','attachmentPayload'].some(k=>Object.hasOwn(args,k)),'Use messages_send for attachments',400);
+    requireThat(!['attachment_id','attachment_principal','attachmentPayload','reply_message_id','send_scope','botline_message_id','dm_fingerprint'].some(k=>Object.hasOwn(args,k)),'Use messages_send for attachments',400);
     return this.sendTelegram(owner,args);
   }
   async sendTelegram(owner,args) {
     const bot=await this.own(owner,args.bot_id);
     requireThat(bot.active&&telegramHumanAllowed(await listHumans(this,owner),args.chat_id),'Chat not allowed',403);
     requireThat(typeof args.text==='string'&&(args.text.length>0||args.attachment_id)&&args.text.length<=(args.attachment_id?1024:4096)&&typeof args.request_id==='string'&&/^[\w-]{8,128}$/.test(args.request_id),'Invalid message or request_id');
-    const id=hash(`${owner}:${args.request_id}`), fingerprint=hash(JSON.stringify([bot.id,args.chat_id,args.text,...(args.attachment_id?[args.attachment_id]:[])]));
-    if(!await this.store.insert('send',id,{owner,fingerprint,state:'uncertain',created:Date.now()})) {
-      const prev=await this.store.get('send',id);requireThat(prev.fingerprint===fingerprint,'request_id reused for different content',409);return prev.result??{status:'uncertain',instruction:'Check Telegram manually; do not resend with a new request_id.'};
+    requireThat(args.reply_message_id===undefined||(Number.isSafeInteger(args.reply_message_id)&&args.reply_message_id>0),'Invalid Telegram reply target');
+    const reply=args.reply_message_id===undefined?{}:{reply_parameters:{message_id:args.reply_message_id}};
+    const id=hash(`${owner}:${args.request_id}`), fingerprint=hash(JSON.stringify([bot.id,args.chat_id,args.text,...(args.attachment_id?[args.attachment_id]:[]),...(args.reply_message_id===undefined?[]:[{reply_message_id:args.reply_message_id}])]));
+    if(!await this.store.insert('send',id,{owner,fingerprint,...(args.send_scope?{sendScope:args.send_scope,botlineMessageId:args.botline_message_id,dmFingerprint:args.dm_fingerprint}:{}),state:'uncertain',created:Date.now()})) {
+      const prev=await this.store.get('send',id);requireThat(prev.fingerprint===fingerprint,'request_id reused for different content',409);requireThat(!prev.sendScope||prev.sendScope===args.send_scope,'Telegram send belongs to a different binding or recipient',409);return prev.result??{status:'uncertain',instruction:'Check Telegram manually; do not resend with a new request_id.'};
     }
     let message;
     if(args.attachment_id){
       await new Attachments(this).inspect(args.attachment_principal,args.attachment_id);
       const {record,bytes}=args.attachmentPayload;
       const image=record.mime.startsWith('image/'),method=image?'sendPhoto':'sendDocument',field=image?'photo':'document';
-      const form=new FormData();form.set('chat_id',args.chat_id);if(args.text)form.set('caption',args.text);form.set(field,new Blob([bytes],{type:record.mime}),record.name);
+      const form=new FormData();form.set('chat_id',args.chat_id);if(reply.reply_parameters)form.set('reply_parameters',JSON.stringify(reply.reply_parameters));if(args.text)form.set('caption',args.text);form.set(field,new Blob([bytes],{type:record.mime}),record.name);
       try{const response=await (this.attachmentFetch??fetch)('https://api.telegram.org/bot'+this.decrypt(bot.token)+'/'+method,{method:'POST',body:form,redirect:'error',signal:AbortSignal.timeout(15000)});const body=await response.json();requireThat(response.ok&&body.ok,'Telegram media send failed');message=body.result;}catch{return {status:'uncertain',instruction:'Attachment send outcome uncertain; check Telegram manually. Reuse request_id; never retry with a new ID.'};}
-    }else message=await this.telegram(this.decrypt(bot.token),'sendMessage',{chat_id:args.chat_id,text:args.text});
-    const result={status:'sent',message_id:String(message.message_id)};await this.store.put('send',id,{owner,fingerprint,state:'sent',result,created:Date.now()});return result;
+    }else message=await this.telegram(this.decrypt(bot.token),'sendMessage',{chat_id:args.chat_id,text:args.text,...reply});
+    const result={status:'sent',message_id:String(message.message_id)};await this.store.put('send',id,{owner,fingerprint,...(args.send_scope?{sendScope:args.send_scope,botlineMessageId:args.botline_message_id,dmFingerprint:args.dm_fingerprint}:{}),state:'sent',result,created:Date.now()});return result;
   }
   subIdentity(owner,p) {
     requireThat(p.name==='telegram.message'&&p.arguments&&typeof p.arguments.bot_id==='string'&&(!p.arguments.chat_id||typeof p.arguments.chat_id==='string'),'Invalid event filter');

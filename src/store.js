@@ -13,8 +13,11 @@ export class Store {
     return result.rows[0];
   }
 
+  async deleteTelegramReplies(owner,botId) {
+    await this.pool.query("DELETE FROM mcp_records WHERE kind='telegram_replies' AND value->>'owner'=$1 AND value->>'botId'=$2",[owner,botId]);
+  }
   async pruneGroupTransport(now=Date.now()) {
-    await this.pool.query("DELETE FROM mcp_records WHERE kind IN ('group_delivery','group_receipt','dot_inbox','muse_inbox') AND (value->>'expires')::bigint<=$1",[now]);
+    await this.pool.query("DELETE FROM mcp_records WHERE kind IN ('group_delivery','group_receipt','dot_inbox','muse_inbox','telegram_replies') AND (value->>'expires')::bigint<=$1",[now]);
   }
   // Use only on a Store whose connection is already checked out (withBotLock).
   // A second checkout here can deadlock the bounded pool. Session and xact
