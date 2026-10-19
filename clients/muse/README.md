@@ -103,7 +103,7 @@ service notice. Production registration, live delivery and deployment are separa
 acceptance steps.
 
 
-## Small files and images
+## Small files, images and audio
 
 Refresh tools/list after upgrading the server; keep your saved token. Upload actual
 bytes (max 2 MiB), then send the returned ID:
@@ -116,7 +116,8 @@ python3 muse-poll.py download --id att_RECEIVED_ID --output ./received.png
 
 Download verifies size and SHA-256, refuses to overwrite, uses your explicit path
 rather than the remote filename, and never executes or ACKs. Native MCP callers can
-use attachments_read image/resource blocks directly. Files expire 24 hours after
+use attachments_read image/audio/resource blocks directly; download accepts all three.
+Audio playback and transcription depend on the calling client. Files expire 24 hours after
 upload, even if a message is still pending; ACK does not remove them early. Download
 once and cache; at most ten authorized reads per attachment and shared instance
 budgets apply. See [full limits and security](../../public/setup.md#small-images-and-files).

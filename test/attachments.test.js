@@ -139,3 +139,76 @@ test('Dot inbox and Grok/webhook adapters preserve attachment metadata without b
  await f.dms.send(f.a,{to:'webhook',attachment_ids:[a.attachment_id],request_id:'web-file-001'});assert.equal(event.data.message.attachments[0].attachment_id,a.attachment_id);
  const {grokbotText}=await import('../src/grokbot.js');assert.match(grokbotText({name:'message.created',data:event.data.message}),new RegExp(a.attachment_id));assert.equal(JSON.stringify(event).includes(upload().data),false);
 });
+
+// These are structural byte fixtures, not playable recordings or codec acceptance.
+function opusBytes(){
+ const head=Buffer.alloc(19);head.write('OpusHead');head[8]=1;head[9]=1;head.writeUInt32LE(48000,12);
+ const tags=Buffer.alloc(16);tags.write('OpusTags');
+ const page=(packet,index)=>{const b=Buffer.alloc(28+packet.length);b.write('OggS');b[5]=index===0?2:index===2?4:0;b.writeUInt32LE(123,14);b.writeUInt32LE(index,18);b[26]=1;b[27]=packet.length;packet.copy(b,28);return b;};
+ return Buffer.concat([page(head,0),page(tags,1),page(Buffer.from([0xf8,0xff,0xfe]),2)]);
+}
+function wavBytes(){const b=Buffer.alloc(46);b.write('RIFF');b.writeUInt32LE(38,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(48000,24);b.writeUInt32LE(96000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(2,40);return b;}
+function mp3Bytes(){const frame=Buffer.alloc(417);Buffer.from([0xff,0xfb,0x90,0]).copy(frame);return Buffer.concat([frame,frame]);}
+test('audio sniffing requires byte structure rather than filenames, declared MIME or lone signatures',()=>{
+ assert.equal(mediaType(opusBytes()),'audio/ogg');assert.equal(mediaType(wavBytes()),'audio/wav');assert.equal(mediaType(mp3Bytes()),'audio/mpeg');
+ const id3=Buffer.from([73,68,51,4,0,0,0,0,0,0]);assert.equal(mediaType(Buffer.concat([id3,mp3Bytes()])),'audio/mpeg');
+ for(const b of [Buffer.from('OggSOpusHead'),Buffer.from('ID3'),Buffer.from('<audio src="evil"/>'),Buffer.from('<svg/>'),opusBytes().subarray(0,47),opusBytes().subarray(0,-1),wavBytes().subarray(0,-1),mp3Bytes().subarray(0,417)])assert.equal(mediaType(b),'application/octet-stream');
+ const badOgg=opusBytes();badOgg[28+8]=99;assert.equal(mediaType(badOgg),'application/octet-stream');
+ const badSequence=opusBytes();badSequence.writeUInt32LE(99,47+18);assert.equal(mediaType(badSequence),'application/octet-stream');
+ const badWav=wavBytes();badWav.writeUInt16LE(99,32);assert.equal(mediaType(badWav),'application/octet-stream');
+ const badMp3=mp3Bytes();badMp3[419]=0x94;assert.equal(mediaType(badMp3),'application/octet-stream');
+ const badTag=Buffer.from(id3);badTag[6]=128;assert.equal(mediaType(Buffer.concat([badTag,mp3Bytes()])),'application/octet-stream');
+});
+test('recognized uploaded audio has one native block or explicit resource fallback with same bytes',async t=>{
+ const f=await fixture(t),bytes=opusBytes(),a=await f.files.upload(f.a,{name:'misleading.txt',data:bytes.toString('base64'),request_id:'audio-upload-001'});
+ assert.equal(a.mime_type,'audio/ogg');const native=await f.files.read(f.a,a.attachment_id);assert.equal(native.content.length,2);assert.deepEqual(native.content[1],{type:'audio',data:bytes.toString('base64'),mimeType:'audio/ogg'});
+ const resource=await f.files.read(f.a,a.attachment_id,'resource');assert.equal(resource.content.length,2);assert.equal(resource.content[1].type,'resource');assert.equal(resource.content[1].resource.blob,bytes.toString('base64'));assert.deepEqual(resource.structuredContent,native.structuredContent);
+ const rpc=await f.app.rpcCall(owner,'tools/call',{name:'attachments_read',arguments:{attachment_id:a.attachment_id,format:'resource'}},f.a);assert.equal(rpc.content.length,2);assert.equal(rpc.content[1].type,'resource');assert.equal(rpc.content[1].resource.blob,bytes.toString('base64'));
+ const rpcNative=await f.app.rpcCall(owner,'tools/call',{name:'attachments_read',arguments:{attachment_id:a.attachment_id}},f.a);assert.equal(rpcNative.content[1].type,'audio');
+ await assert.rejects(f.files.read(f.a,a.attachment_id,'url'),/Invalid attachment read format/);await assert.rejects(f.files.read(f.b,a.attachment_id),/not shared/);
+ const catalog=(await import('../src/attachments.js')).attachmentTools.find(t=>t.name==='attachments_read');assert.deepEqual(catalog.inputSchema.required,['attachment_id']);assert.deepEqual(catalog.inputSchema.properties.format.enum,['native','resource']);
+});
+test('Telegram voice/audio metadata enters inbox without binary, captions survive and reads use actual MIME',async t=>{
+ const f=await fixture(t),{bot,m}=await telegramFixture(f),bytes=opusBytes();let downloads=0;
+ f.app.telegram=async(_,method,args)=>{if(method==='getFile'){assert.equal(args.file_id,'voice-file');return {file_path:'voice/file_1.oga'};}return {};};
+ f.app.attachmentFetch=async()=>{downloads++;return new Response(bytes);};
+ const voice={...m,document:undefined,voice:{file_id:'voice-file',file_size:bytes.length,mime_type:'text/html',duration:1}};
+ await f.dms.receiveTelegram(bot,voice,901);await f.dms.receiveTelegram(bot,voice,901);assert.equal(downloads,1);
+ const inbox=new MuseInbox(f.app),first=(await inbox.list(f.b,{})).messages[0];assert.equal(first.attachments[0].name,'voice.ogg');assert.equal(first.attachments[0].mime_type,'audio/ogg');assert.match(first.text,/attachments_read/);assert.equal(JSON.stringify(first).includes(bytes.toString('base64')),false);
+ assert.equal((await f.files.read(f.b,first.attachments[0].attachment_id)).content[1].type,'audio');
+ await f.dms.receiveTelegram(bot,{...voice,message_id:8,voice:undefined,audio:{file_id:'voice-file',file_size:bytes.length,file_name:'../../track\n\u202e.ogg',mime_type:'application/octet-stream'},caption:'A synthetic caption'},902);
+ const audio=(await inbox.list(f.b,{})).messages.find(x=>x.attachments?.[0].name==='track.ogg');assert.ok(audio);assert.match(audio.text,/A synthetic caption/);assert.equal(audio.attachments[0].mime_type,'audio/ogg');
+ f.app.attachmentFetch=async()=>new Response('not audio');
+ const forged=await f.files.telegram(f.b,bot,{...voice,voice:undefined,audio:{file_id:'voice-file',file_size:9,mime_type:'audio/ogg'}},903);assert.equal(forged.attachment.name,'audio.bin');assert.equal(forged.attachment.mime_type,'application/octet-stream');assert.equal((await f.files.read(f.b,forged.attachment.attachment_id)).content[1].type,'resource');
+ await f.store.delete('human',humanRecordId(owner,'humanone'));await assert.rejects(f.files.read(f.b,first.attachments[0].attachment_id),/revoked/);
+});
+test('Telegram voice preserves bounded download, unknown-size refusal and source recheck',async t=>{
+ const f=await fixture(t),{bot,m}=await telegramFixture(f),bytes=opusBytes();let calls=0;
+ f.app.telegram=async()=>{calls++;return {file_path:'voice/a.oga'};};
+ const voice={...m,document:undefined,voice:{file_id:'voice-file',file_size:bytes.length}};
+ for(const size of [undefined,0,-1,1.5,ATTACHMENT_POLICY.maxBytes+1])assert.deepEqual(await f.files.telegram(f.b,bot,{...voice,voice:{...voice.voice,file_size:size}},910),{error:'attachment_too_large_or_unknown_size'});
+ assert.equal(calls,0);
+ f.app.attachmentFetch=async()=>new Response(Buffer.concat([bytes,Buffer.from('extra')]));assert.deepEqual(await f.files.telegram(f.b,bot,voice,911),{error:'attachment_download_failed'});
+ f.app.attachmentFetch=async()=>new Response(bytes.subarray(0,-1));assert.deepEqual(await f.files.telegram(f.b,bot,voice,912),{error:'attachment_download_failed'});
+ f.app.attachmentFetch=async()=>{await f.store.put('group_bot',bot.id,{owner,agentId:f.b.agentId,bindingId:'new-binding'});return new Response(bytes);};await assert.rejects(f.files.telegram(f.b,bot,voice,913),/revoked/);
+});
+test('Telegram document and photo replies carry actual canonical target as multipart reply_parameters',async t=>{
+ const f=await fixture(t),{bot,m}=await telegramFixture(f);
+ f.app.telegram=async()=>({});
+ await f.dms.receiveTelegram(bot,{...m,document:undefined,text:'synthetic question'},301);
+ const incoming=(await new MuseInbox(f.app).list(f.b,{})).messages[0];
+ const file=await f.files.upload(f.b,upload());
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHioAAAAASUVORK5CYII=';
+ const photo=await f.files.upload(f.b,{name:'photo.png',data:png,request_id:'reply-photo-upload'});
+ let sends=0;
+ f.app.attachmentFetch=async(url,options)=>{
+  assert.equal(new URL(url).pathname.endsWith(sends===0?'/sendDocument':'/sendPhoto'),true);
+  assert.deepEqual(JSON.parse(options.body.get('reply_parameters')),{message_id:m.message_id});
+  return new Response(JSON.stringify({ok:true,result:{message_id:88+(sends++)}}));
+ };
+ for(const [index,a] of [file,photo].entries()){
+  const args={to:'humanone',text:'synthetic reply',attachment_ids:[a.attachment_id],reply_to_message_id:incoming.message_id,request_id:'multipart-reply-'+index};
+  const sent=await f.dms.send(f.b,args);assert.equal(sent.status,'accepted');await f.dms.send(f.b,args);
+ }
+ assert.equal(sends,2);
+});

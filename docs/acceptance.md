@@ -112,3 +112,24 @@ These tests do not send actual Telegram photos/documents, contact external agent
 validate every MCP client's image rendering/download UI, or establish the production
 provider plan/remaining billing allowance. Production checks are public read-only
 version/discovery checks; real attachment delivery requires separate user permission.
+
+
+## Voice/audio and Telegram reply regression coverage
+
+Synthetic attachment tests cover native Ogg Opus/PCM WAV/MP3 identification,
+spoofed MIME fallback, voice/audio captions and metadata, bounded downloads,
+source revocation, and native/resource MCP reads. Local ffmpeg-generated samples
+can verify format identification without contacting Telegram or a speech service.
+This does not establish client playback, speech understanding or transcription.
+
+Reply tests cover both inbound directions (reply to human input and reply to agent
+output), actual text/multipart reply parameters, canonical IDs, identity/binding
+isolation, unknown/expired targets, bounded retention, idempotent retries and
+mapping-persistence recovery after a successful send. PGlite checks exercise
+single-connection locking and cleanup. Production deployment and live Telegram
+voice/reply acceptance are separate stages; no real messages are sent by these
+mocked tests.
+
+Grok/Cursor adapter snapshots check that canonical routing IDs survive text-only
+forwarding while original body bytes and sender identity remain unchanged; forged
+body metadata and invalid event IDs do not become server routing metadata.

@@ -460,3 +460,28 @@ still applies. See the guide for receiver selection and separate readiness stage
 ## Attachments
 
 See the authoritative [small images/files guide](../public/setup.md#small-images-and-files) for tools, grants, expiry, Telegram/Grok/Muse behavior, and conservative resource budgets. Inbox and webhook attachment fields contain metadata, never raw bytes or public URLs. Display text appends an attachment summary after the original body; use the structured attachments field, not body text, for IDs and metadata.
+
+
+## Telegram voice/audio and reply association
+
+Handle-bound private DMs ingest `voice` and `audio` through the same bounded,
+authenticated attachment path as documents/photos. Metadata stays in the inbox;
+`attachments_read` returns recognized audio as a native MCP audio block, or a
+single resource blob with optional `format: "resource"`. Existing tool calls and
+ordinary image/file behavior remain supported. No transcription or transcoding
+service is configured. See [setup limits](../public/setup.md#small-images-and-files).
+
+`reply_to_message_id` always uses the Botline canonical ID. Telegram inbound replies
+resolve only server-observed IDs scoped to owner, bot, current binding, agent,
+chat and human handle. Outbound text and multipart attachment replies resolve that
+ID to Telegram `reply_parameters.message_id`. An unknown inbound reference is
+omitted; an explicit unavailable outbound reference fails before sending.
+Mappings have no text or file bytes, last at most seven days, retain at most 512
+recent messages per scope, and survive ACK. Unbind removes them. Routing and human
+registry checks still apply; metadata is not authority. A cached successful send
+can repair mapping persistence without sending again; an uncertain send cannot.
+
+The Grok/Cursor text-only adapter preserves the sender header and participant body,
+then appends a server-generated routing-metadata line with validated canonical
+`message_id` and optional `reply_to_message_id`. It never parses IDs or authority
+from participant text. Dot/Muse structured inbox formatting is unchanged.

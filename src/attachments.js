@@ -6,9 +6,64 @@ export const ATTACHMENT_POLICY={maxBytes:2*1024*1024,maxStoredBytes:32*1024*1024
 const schema=properties=>({type:'object',properties,required:Object.keys(properties).filter(k=>k!=='agent_token'),additionalProperties:false});
 export const attachmentTools=[
  {name:'attachments_upload',description:'Upload one small file as base64 (maximum 2 MiB). Requires a stable request_id; retries with different bytes/metadata are rejected. Returns an attachment_id; send it with messages_send to grant that recipient access. No public URL. Fixed 24-hour expiry, shared instance storage/daily quotas. Refresh tools/list; no re-registration needed.',inputSchema:schema({request_id:{type:'string'},name:{type:'string'},data:{type:'string',description:'Canonical base64 of actual file bytes; do not send URLs.'},agent_token:callerTokenProperty}),annotations:{readOnlyHint:false,idempotentHint:true}},
- {name:'attachments_read',description:'Read actual bytes of one authorized unexpired attachment. Raster images return an MCP image block; other files return an embedded resource blob. Never execute files. Reading consumes the shared daily transfer budget; download once and cache locally. ACK does not delete bytes before fixed expiry. No public links or Telegram credentials are returned.',inputSchema:schema({attachment_id:{type:'string'},agent_token:callerTokenProperty}),annotations:{readOnlyHint:true}},
+ {name:'attachments_read',description:'Read actual bytes of one authorized unexpired attachment. Raster images return an MCP image block; recognized audio returns an MCP audio block; other files return an embedded resource blob. Set format=resource for a downloadable blob instead of native media; client playback and transcription support vary. Never execute files. Reading consumes the shared daily transfer budget; download once and cache locally. ACK does not delete bytes before fixed expiry. No public links or Telegram credentials are returned.',inputSchema:{...schema({attachment_id:{type:'string'},agent_token:callerTokenProperty}),properties:{attachment_id:{type:'string'},format:{type:'string',enum:['native','resource'],description:'Optional; native by default. resource returns one embedded blob for clients without native media support.'},agent_token:callerTokenProperty}},annotations:{readOnlyHint:true}},
 ];
 export const cleanFilename=value=>String(value??'file').split(/[\\/]/).at(-1).replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,'').slice(0,120)||'file';
+// Byte identification is deliberately narrow. Metadata/extensions are never evidence
+// of a codec, and identification is not a decoder or a claim that content is safe.
+function audioType(b){
+ if(b.length>=47&&b.toString('ascii',0,4)==='OggS'){
+  let offset=0,pages=0,serial,sequence=0;
+  while(offset<b.length){
+   if(offset+27>b.length||b.toString('ascii',offset,offset+4)!=='OggS'||b[offset+4]!==0||(b[offset+5]&~7))return null;
+   const count=b[offset+26],table=offset+27,end=table+count;if(!count||end>b.length)return null;
+   const size=b.subarray(table,end).reduce((n,v)=>n+v,0);if(!size||end+size>b.length)return null;
+   if(!pages){
+    serial=b.readUInt32LE(offset+14);
+    // Standard mono/stereo Opus identification packet on its own BOS page.
+    if(b[offset+5]!==2||count!==1||size!==19||b.toString('ascii',end,end+8)!=='OpusHead'||b[end+8]!==1||![1,2].includes(b[end+9])||b[end+18]!==0)return null;
+   }
+   if(pages===1&&(size<16||b.toString('ascii',end,end+8)!=='OpusTags'))return null;
+   if(b.readUInt32LE(offset+14)!==serial||b.readUInt32LE(offset+18)!==sequence++)return null;
+   pages++;offset=end+size;
+  }
+  // A lone identification header is not an audio stream.
+  if(pages>=3)return 'audio/ogg';
+ }
+ if(b.length>=44&&b.toString('ascii',0,4)==='RIFF'&&b.toString('ascii',8,12)==='WAVE'&&b.readUInt32LE(4)===b.length-8){
+  let offset=12,format=false,data=false,align=0;
+  while(offset+8<=b.length){
+   const type=b.toString('ascii',offset,offset+4),size=b.readUInt32LE(offset+4),start=offset+8,end=start+size;
+   if(end>b.length)return null;
+   if(type==='fmt '){
+    if(format||size<16)return null;
+    const codec=b.readUInt16LE(start),channels=b.readUInt16LE(start+2),rate=b.readUInt32LE(start+4),bits=b.readUInt16LE(start+14);
+    align=b.readUInt16LE(start+12);
+    if(codec!==1||channels<1||channels>2||rate<8000||rate>192000||![8,16,24,32].includes(bits)||align!==channels*bits/8||b.readUInt32LE(start+8)!==rate*align)return null;
+    format=true;
+   }else if(type==='data'){if(!format||!size||size%align)return null;data=true;}
+   offset=end+(size%2);
+  }
+  if(offset===b.length&&format&&data)return 'audio/wav';
+ }
+ // MPEG Layer III: skip a bounded ID3v2 tag and require two complete,
+ // consecutive frames with consistent MPEG version and sample rate.
+ let offset=0;
+ if(b.length>=10&&b.toString('ascii',0,3)==='ID3'){
+  if(![2,3,4].includes(b[3])||b[4]===255||b.subarray(6,10).some(v=>v&128))return null;
+  offset=10+b.subarray(6,10).reduce((n,v)=>n*128+v,0)+(b[3]===4&&(b[5]&16)?10:0);
+ }
+ let frames=0,signature;
+ while(offset+4<=b.length&&frames<2){
+  const h=b.readUInt32BE(offset),version=(h>>>19)&3,layer=(h>>>17)&3,bitrateIndex=(h>>>12)&15,rateIndex=(h>>>10)&3;
+  if((h>>>21)!==2047||version===1||layer!==1||!bitrateIndex||bitrateIndex===15||rateIndex===3||(h&3)===2)break;
+  const rate=[44100,48000,32000][rateIndex]/(version===3?1:version===2?2:4),bitrate=(version===3?[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320]:[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160])[bitrateIndex];
+  const length=Math.floor((version===3?144000:72000)*bitrate/rate)+((h>>>9)&1),current=version+':'+rate;
+  if((signature&&signature!==current)||offset+length>b.length)break;
+  signature=current;offset+=length;frames++;
+ }
+ return frames>=2?'audio/mpeg':null;
+}
 export function mediaType(b){
  const pixels=(w,h)=>w>0&&h>0&&w*h<=16000000;
  if(b.length>=33&&b.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex'))&&b.readUInt32BE(8)===13&&b.toString('ascii',12,16)==='IHDR'&&pixels(b.readUInt32BE(16),b.readUInt32BE(20)))return 'image/png';
@@ -16,8 +71,8 @@ export function mediaType(b){
   let i=2;while(i+4<=b.length&&b[i]===255){const marker=b[i+1];if(marker===0xda||marker===0xd9)break;const length=b.readUInt16BE(i+2);if(length<2||i+2+length>b.length)break;
    if([0xc0,0xc1,0xc2].includes(marker)&&length>=8&&pixels(b.readUInt16BE(i+7),b.readUInt16BE(i+5)))return 'image/jpeg';i+=length+2;}
  }
- // Unknown raster formats and active SVG/HTML remain opaque downloads.
- return 'application/octet-stream';
+ // Unknown codecs/formats and active SVG/HTML remain opaque downloads.
+ return audioType(b)??'application/octet-stream';
 }
 const meta=r=>({attachment_id:r.id,name:r.name,mime_type:r.mime,size:r.size,sha256:r.sha256,expires_at:new Date(r.expires).toISOString()});
 function encrypt(app,b){const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',Buffer.from(app.key,'base64'),iv);return Buffer.concat([iv,c.update(b),c.final(),c.getAuthTag()]);}
@@ -82,11 +137,11 @@ export class Attachments{
   await this.actor(p);await this.budget(p.owner,0,1,'read');const r=await this.inspect(p,id);await this.budget(p.owner,this.charge(r.size),0,'file',id);
   const b=await this.store.getAttachmentBody(id);await this.inspect(p,id);requireThat(b,'Attachment expired',404);return {record:r,bytes:decrypt(this.app,b)};
  }
- async read(p,id){const {record:r,bytes}=await this.bytes(p,id);const metadata=meta(r),base64=bytes.toString('base64');return {content:[{type:'text',text:JSON.stringify(metadata)},r.mime.startsWith('image/')?{type:'image',data:base64,mimeType:r.mime}:{type:'resource',resource:{uri:'botline://attachments/'+r.id,mimeType:r.mime,blob:base64}}],structuredContent:metadata};}
+ async read(p,id,format='native'){requireThat(['native','resource'].includes(format),'Invalid attachment read format');const {record:r,bytes}=await this.bytes(p,id);const metadata=meta(r),base64=bytes.toString('base64');return {content:[{type:'text',text:JSON.stringify(metadata)},format==='native'&&r.mime.startsWith('image/')?{type:'image',data:base64,mimeType:r.mime}:format==='native'&&r.mime.startsWith('audio/')?{type:'audio',data:base64,mimeType:r.mime}:{type:'resource',resource:{uri:'botline://attachments/'+r.id,mimeType:r.mime,blob:base64}}],structuredContent:metadata};}
  async telegramInternal(p,bot,m,updateId){
   await this.budget(p.owner,0,1,'upload');
   const source={botId:bot.id,agentId:p.agentId,bindingId:bot.bindingId,humanId:String(m.from.id),humanHandle:(await this.store.list('human',p.owner)).find(h=>h.telegram_user_id===String(m.from.id))?.handle};
-  const f=m.document??(Array.isArray(m.photo)?m.photo.at(-1):null);if(!f)return {error:'unsupported_media'};
+  const f=m.document??m.voice??m.audio??(Array.isArray(m.photo)?m.photo.at(-1):null);if(!f)return {error:'unsupported_media'};
   if(!Number.isSafeInteger(f.file_size)||f.file_size<=0||f.file_size>ATTACHMENT_POLICY.maxBytes)return {error:'attachment_too_large_or_unknown_size'};
   const requestId='tg_'+hash(bot.id+':'+updateId),prior=await this.store.get('attachment_upload',hash(p.owner+':'+p.agentId+':'+requestId));
   if(prior){const r=await this.inspect(p,prior.attachmentId);return {attachment:meta(r)};}
@@ -99,6 +154,6 @@ export class Attachments{
    const reader=response.body.getReader(),chunks=[];let size=0;try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;requireThat(size<=f.file_size&&size<=ATTACHMENT_POLICY.maxBytes,'File exceeds limit');chunks.push(Buffer.from(value));}}finally{await reader.cancel().catch(()=>{});}
    bytes=Buffer.concat(chunks);requireThat(bytes.length===f.file_size,'File size mismatch');
   }catch{return {error:'attachment_download_failed'};}
-  await this.allowed(p,check);return {attachment:await this.persist(p,bytes,m.document?.file_name??'photo.jpg',requestId,source)};
+  await this.allowed(p,check);return {attachment:await this.persist(p,bytes,m.document?.file_name??(m.voice?'voice.ogg':m.audio?(m.audio.file_name??'audio.bin'):'photo.jpg'),requestId,source)};
  }
 }

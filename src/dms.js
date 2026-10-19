@@ -1,4 +1,5 @@
 import {Attachments} from './attachments.js';
+import {replyScope,replyScopeKey,findReply,rememberReply} from './telegram-replies.js';
 import {DotInbox,isDotInboxAgent} from './dot-inbox.js';
 import {MuseInbox,isMuseAgent} from './muse-inbox.js';
 import {hash,nonce,requireThat,signingKey,signedHeaders,same} from './security.js';
@@ -82,19 +83,28 @@ export class Dms {
    requireThat(!args.attachment_ids.length||args.text.length<=1024,'Attachment caption exceeds 1024 characters');
    const bot=await new BotBindings(this.app).current(p.owner,actor.agent_id),humans=await listHumans(this.app,p.owner);
    requireThat(bot.active&&telegramHumanAllowed(humans,peer.id),'Private DM is not admitted for this handle',403);
+   const initialRoute=await this.store.get('group_bot',bot.id);
+   requireThat(initialRoute?.owner===p.owner&&initialRoute.agentId===actor.agent_id,'Telegram binding changed',409);
+   const scope=replyScope(p.owner,bot.id,initialRoute.bindingId,actor.agent_id,peer.id,peer.handle),sendKey=hash(`${p.owner}:${hash(`dm:${actor.agent_id}:${args.request_id}`)}`);
    const result=await this.store.withLock('dms:'+p.owner,async tx=>{
-    await this.prune(tx);const prev=await tx.get('group_receipt',rid);if(prev){requireThat(prev.fingerprint===fingerprint,'request_id reused for different content',409);return {message_id:prev.message_id};}
+    await this.prune(tx);const prev=await tx.get('group_receipt',rid);if(prev){requireThat(prev.fingerprint===fingerprint,'request_id reused for different content',409);requireThat(!prev.replyScope||replyScopeKey(prev.replyScope)===replyScopeKey(scope),'Telegram binding or recipient changed',409);requireThat(prev.replyScope||args.reply_to_message_id===undefined,'Pre-upgrade reply intent has no verified Telegram target; inspect the original send',409);return {message_id:prev.message_id,replyTelegramId:prev.replyTelegramId,mapReply:!!prev.replyScope};}
+    const reply=args.reply_to_message_id===undefined?null:await findReply(tx,scope,{canonicalId:args.reply_to_message_id});
+    requireThat(args.reply_to_message_id===undefined||reply,'Reply target unavailable in this Telegram conversation',400);
     if(args.attachment_ids.length)await new Attachments(this.app).grant(p,args.attachment_ids,peer,tx);
-    const messageId='msg_'+nonce();await tx.put('group_receipt',rid,{owner:p.owner,fingerprint,message_id:messageId,to:peer.handle,expires:Date.now()+DM_POLICY.receiptTtl});return {message_id:messageId};
+    const cachedSend=await tx.get('send',sendKey);requireThat(!cachedSend?.sendScope||cachedSend.sendScope===replyScopeKey(scope),'Telegram send belongs to a different binding or recipient',409);requireThat(!cachedSend?.dmFingerprint||cachedSend.dmFingerprint===fingerprint,'request_id reused for different content',409);
+    const messageId=cachedSend?.sendScope?cachedSend.botlineMessageId:'msg_'+nonce(),replyTelegramId=reply?.telegramId;await tx.put('group_receipt',rid,{owner:p.owner,fingerprint,message_id:messageId,to:peer.handle,replyScope:scope,...(replyTelegramId?{replyTelegramId}:{}),expires:Date.now()+DM_POLICY.receiptTtl});return {message_id:messageId,replyTelegramId,mapReply:true};
    });
    const deliver=async()=>{
    let attachmentPayload;
    if(args.attachment_ids.length&&!await this.store.get('send',hash(`${p.owner}:${hash(`dm:${actor.agent_id}:${args.request_id}`)}`)))attachmentPayload=await new Attachments(this.app).bytesInternal(p,args.attachment_ids[0]);
-   const telegram=await this.store.withBotLock('bot-binding:'+p.owner,async tx=>{
-    const route=await tx.get('group_bot',bot.id);requireThat(route?.agentId===actor.agent_id,'Telegram binding changed',409);
+   const telegram=await this.store.withBotLock('bot-binding:'+p.owner,tx=>tx.withHeldConnectionLock('dms:'+p.owner,async tx=>{
+    const route=await tx.get('group_bot',bot.id);requireThat(route?.owner===p.owner&&route.agentId===actor.agent_id&&(route.bindingId??null)===scope.bindingId,'Telegram binding changed',409);
+    const human=await getHuman({store:tx},p.owner,peer.handle);requireThat(human?.telegram_user_id===peer.id,'Telegram recipient changed',403);
     const app=Object.assign(Object.create(Object.getPrototypeOf(this.app)),this.app,{store:tx});
-    return app.sendTelegram(p.owner,{bot_id:bot.id,chat_id:peer.id,text:args.text,...(args.attachment_ids.length?{attachment_id:args.attachment_ids[0],attachment_principal:p,attachmentPayload}:{}),request_id:hash(`dm:${actor.agent_id}:${args.request_id}`)});
-   });
+    const sent=await app.sendTelegram(p.owner,{bot_id:bot.id,chat_id:peer.id,text:args.text,send_scope:replyScopeKey(scope),botline_message_id:result.message_id,dm_fingerprint:fingerprint,...(result.replyTelegramId?{reply_message_id:result.replyTelegramId}:{}),...(args.attachment_ids.length?{attachment_id:args.attachment_ids[0],attachment_principal:p,attachmentPayload}:{}),request_id:hash(`dm:${actor.agent_id}:${args.request_id}`)});
+    if(sent.status==='sent'&&result.mapReply&&(await tx.get('send',sendKey))?.sendScope===replyScopeKey(scope))await rememberReply(tx,scope,result.message_id,Number(sent.message_id),'outbound');
+    return sent;
+   }));
    return telegram;};
    const telegram=args.attachment_ids.length?await new Attachments(this.app).operation(p,deliver):await deliver();
    return {to:peer.handle,message_id:result.message_id,status:telegram.status==='sent'?'accepted':telegram.status,telegram,...await this.senderReceive(actor)};
@@ -136,10 +146,15 @@ export class Dms {
    await this.prune(tx);if(await tx.get('group_receipt',rid))return false;
    if(mediaClaim)requireThat((await tx.get('attachment_ingest',rid))?.claim===mediaClaim,'Attachment processing lease changed',503);
    const current=await tx.get('bot',bot.id),humans=await tx.list('human',bot.owner);requireThat(current?.active&&telegramSenderAllowed(m,humans),'Telegram access changed',403);
-   if(isDotInboxAgent(agent)||isMuseAgent(agent)){const route=await tx.get('group_bot',bot.id);requireThat(route?.owner===bot.owner&&route.agentId===bot.groupAgentId&&route.bindingId===bot.bindingId,'Telegram binding changed',403);}
+   const route=await tx.get('group_bot',bot.id);requireThat(route?.owner===bot.owner&&route.agentId===bot.groupAgentId&&route.bindingId===bot.bindingId,'Telegram binding changed',403);
    const human=await getHumanByTelegramId({store:tx},bot.owner,String(m.from.id));
+   requireThat(human,'Telegram sender mapping changed',403);
+   const scope=replyScope(bot.owner,bot.id,bot.bindingId,agent.agent_id,m.chat.id,human.handle);
+   const replyId=m.reply_to_message?.message_id;
+   const reply=Number.isSafeInteger(replyId)&&replyId>0&&(!m.reply_to_message.chat||String(m.reply_to_message.chat.id)===scope.chatId)?await findReply(tx,scope,{telegramId:replyId}):null;
    const sender=human?{kind:'human',id:human.telegram_user_id,handle:human.handle,name:human.display_name}:{kind:'telegram',is_bot:m.from.is_bot,id:String(m.from.id),name:[m.from.first_name,m.from.last_name].filter(Boolean).join(' ')};
-   const event={eventId:messageId,name:'message.created',timestamp:new Date(m.date*1000).toISOString(),data:{message_id:messageId,sender,to:{kind:'agent',id:agent.agent_id,handle:agent.handle},text:m.text??m.caption??'',...(media?.attachment?{attachments:[media.attachment]}:{}),...(media?.error?{attachment_error:media.error}:{}),telegram:{bot_id:bot.id,chat_id:String(m.chat.id),message_id:m.message_id,...((isDotInboxAgent(agent)||isMuseAgent(agent))?{binding_id:bot.bindingId}:{})}},cursor:null};
+   const event={eventId:messageId,name:'message.created',timestamp:new Date(m.date*1000).toISOString(),data:{message_id:messageId,sender,to:{kind:'agent',id:agent.agent_id,handle:agent.handle},text:m.text??m.caption??'',...(reply?{reply_to_message_id:reply.canonicalId}:{}),...(media?.attachment?{attachments:[media.attachment]}:{}),...(media?.error?{attachment_error:media.error}:{}),telegram:{bot_id:bot.id,chat_id:String(m.chat.id),message_id:m.message_id,...((isDotInboxAgent(agent)||isMuseAgent(agent))?{binding_id:bot.bindingId}:{})}},cursor:null};
+   await rememberReply(tx,scope,messageId,m.message_id,'inbound');
    await this.enqueue(tx,bot.owner,event,[bot.groupAgentId]);if(mediaClaim)await tx.delete('attachment_ingest',rid);await tx.put('group_receipt',rid,{owner:bot.owner,message_id:messageId,expires:Date.now()+DM_POLICY.receiptTtl});return true;
   });
   if(queued){

@@ -25,7 +25,8 @@ class MemoryStore {
  async telegramReactionSnapshot(botId,owner,agentId){return {bot:await this.get('bot',botId),route:await this.get('group_bot',botId),agent:await this.get('agent',agentId),humans:await this.list('human',owner)};}
  async withBotLock(key,fn){const last=this.queue;let release;this.queue=new Promise(r=>release=r);await last;try{return await fn(this);}finally{release();}}
  async reserveDeniedReply(){return true;}
- async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox','muse_inbox'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
+ async deleteTelegramReplies(o,b){for(const r of await this.list('telegram_replies',o))if(r.botId===b)await this.delete('telegram_replies',r.id);}
+ async pruneGroupTransport(now=Date.now()){for(const k of ['group_delivery','group_receipt','dot_inbox','muse_inbox','telegram_replies'])for(const r of await this.list(k))if(r.expires<=now)await this.delete(k,r.id);}
 }
 async function fixture(store=new MemoryStore()){
  const events=[],telegram=[];const app=new App({store,instanceKey:'x'.repeat(64),key:Buffer.alloc(32,7).toString('base64'),origin:'https://mcp.example',post:async(url,h,body)=>{const e=JSON.parse(body);if(e.type!=='verification')events.push({url,event:e});return {status:200,body:JSON.stringify({challenge:e.challenge})};},telegram:async(t,method,args)=>{telegram.push({method,args});return {message_id:9};}});
@@ -493,4 +494,117 @@ test('inbox headers use server sender metadata, preserve raw bodies and ACK iden
  for(const [actor,platform] of [[{agent_id:'m',handle:'m',bot_type:'muse'},'muse'],[{agent_id:'d',handle:'dot',bot_type:'dot'},'chatgpt'],[{agent_id:'g',handle:'g',grokbot_agent_name:'G'},'grokbot'],[{agent_id:'a',handle:'a'},'agent']]){
   assert.equal(f.g.messageEvent(actor,peer,{text:body},'msg').data.sender.platform,platform);
  }
+});
+
+async function replyFixture(store){
+ const f=await fixture(store);
+ await f.store.put('bot','123',{id:'123',owner,active:true,token:f.app.encrypt('synthetic'),hookSecret:'hook'});
+ await f.store.put('group_bot','123',{owner,agentId:f.a.agentId,bindingId:'generation-1'});
+ await configureHuman(f.app,owner,{human_handle:'person',telegram_user_id:'42'});
+ await f.g.subscription(f.a,inbox());
+ let id=500;f.app.telegram=async(_,method,args)=>{f.telegram.push({method,args});return {message_id:++id};};
+ f.incoming=async(id,reply,chat=42)=>{await f.app.receive('123','hook',{update_id:id,message:{message_id:id,from:{id:chat,is_bot:false},chat:{id:chat,type:'private'},date:Math.floor(Date.now()/1000),text:'synthetic',...(reply?{reply_to_message:{message_id:reply,chat:{id:chat,type:'private'}}}:{})}});return f.events.at(-1)?.event.data.message;};
+ return f;
+}
+test('Telegram replies round trip canonical IDs in both directions; retry and ACK-independent metadata',async()=>{
+ const f=await replyFixture(),first=await f.incoming(101);
+ const next=await f.incoming(102,101);assert.equal(next.reply_to_message_id,first.message_id);
+ const args={to:'person',text:'answer',reply_to_message_id:first.message_id,request_id:'reply-roundtrip-1'};
+ const sent=await f.g.send(f.a,args),wire=f.telegram.filter(c=>c.method==='sendMessage');
+ assert.deepEqual(wire.at(-1).args.reply_parameters,{message_id:101});
+ const response=await f.incoming(103,Number(sent.telegram.message_id));assert.equal(response.reply_to_message_id,sent.message_id);
+ const again=await f.g.send(f.a,args);assert.equal(again.message_id,sent.message_id);assert.equal(f.telegram.filter(c=>c.method==='sendMessage').length,wire.length);
+ await assert.rejects(f.g.send(f.a,{...args,reply_to_message_id:next.message_id}),/reused/);
+ const unknown=await f.incoming(104,99999);assert.equal(unknown.reply_to_message_id,undefined);
+ assert(!JSON.stringify(await f.store.list('telegram_replies')).includes('synthetic'));
+});
+test('reply targets fail closed for unknown, other human, other bot, stale binding and expired mappings',async()=>{
+ const f=await replyFixture(),first=await f.incoming(201);
+ const send=(id,rid='invalid-reply-1')=>f.g.send(f.a,{to:'person',text:'answer',reply_to_message_id:id,request_id:rid});
+ const before=(await f.store.list('group_receipt')).length;
+ await assert.rejects(send('msg_unknown'),/Reply target unavailable/);assert.equal((await f.store.list('group_receipt')).length,before);
+ await configureHuman(f.app,owner,{human_handle:'otherperson',telegram_user_id:'43'});
+ await assert.rejects(f.g.send(f.a,{to:'otherperson',text:'x',reply_to_message_id:first.message_id,request_id:'invalid-reply-2'}),/Reply target unavailable/);
+ await f.store.put('bot','124',{id:'124',owner,active:true,token:f.app.encrypt('synthetic'),hookSecret:'hook2'});await f.store.put('group_bot','124',{owner,agentId:f.b.agentId,bindingId:'generation-1'});
+ await assert.rejects(f.g.send(f.b,{to:'person',text:'x',reply_to_message_id:first.message_id,request_id:'invalid-reply-3'}),/Reply target unavailable/);
+ await f.store.put('group_bot','123',{owner,agentId:f.a.agentId,bindingId:'generation-2'});
+ await assert.rejects(send(first.message_id),/Reply target unavailable/);
+ const newGeneration=await f.incoming(202,201);assert.equal(newGeneration.reply_to_message_id,undefined);
+ await f.store.put('group_bot','123',{owner,agentId:f.a.agentId,bindingId:'generation-1'});
+ const rows=await f.store.list('telegram_replies');for(const row of rows){row.entries.forEach(e=>e.expires=0);await f.store.put('telegram_replies',row.id,row);}
+ await assert.rejects(send(first.message_id),/Reply target unavailable/);
+ assert.equal(f.telegram.filter(c=>c.method==='sendMessage').length,0);
+});
+test('outgoing successful send can repair failed mapping persistence without resending; uncertainty creates no mapping',async()=>{
+ const f=await replyFixture(),first=await f.incoming(301),put=f.store.put.bind(f.store);let fail=true;
+ f.store.put=async(k,id,v)=>{if(k==='telegram_replies'&&fail){fail=false;throw Error('synthetic mapping outage');}return put(k,id,v);};
+ const args={to:'person',text:'answer',reply_to_message_id:first.message_id,request_id:'reply-persistence-1'};
+ await assert.rejects(f.g.send(f.a,args),/mapping outage/);
+ const sent=await f.g.send(f.a,args);assert.equal(f.telegram.filter(c=>c.method==='sendMessage').length,1);
+ assert.equal((await f.incoming(302,Number(sent.telegram.message_id))).reply_to_message_id,sent.message_id);
+ let attempts=0;f.app.telegram=async()=>{attempts++;throw Error('synthetic timeout');};
+ const uncertain={...args,request_id:'reply-uncertain-1'};
+ await assert.rejects(f.g.send(f.a,uncertain),/timeout/);
+ assert.equal((await f.g.send(f.a,uncertain)).status,'uncertain');assert.equal(attempts,1);
+ assert.equal((await f.store.list('telegram_replies'))[0].entries.filter(e=>e.direction==='outbound').length,1);
+});
+test('reply mapping bounded retention and identity keys do not mix scopes',async()=>{
+ const {replyScope,rememberReply,findReply,REPLY_POLICY}=await import('../src/telegram-replies.js');
+ const s=new MemoryStore(),scope=replyScope(owner,'123','one','agent-a','42','person');
+ for(let i=1;i<=REPLY_POLICY.maxEntries+1;i++)await rememberReply(s,scope,'msg_'+i,i,'inbound');
+ assert.equal(await findReply(s,scope,{canonicalId:'msg_1'}),undefined);assert.equal((await findReply(s,scope,{telegramId:2})).canonicalId,'msg_2');
+ for(const change of [{owner:'another'},{botId:'124'},{bindingId:'two'},{agentId:'agent-b'},{chatId:'43'},{humanHandle:'renamed'}])assert.equal(await findReply(s,{...scope,...change},{telegramId:2}),undefined);
+ await assert.rejects(rememberReply(s,scope,'msg_conflict',2,'outbound'),/conflict/);
+});
+test('PGlite single checked-out connection supports reply send and mapping cleanup',async()=>{
+ const db=new PGlite();let tail=Promise.resolve();const query=async(...a)=>{const r=await db.query(...a);return {...r,rowCount:r.affectedRows??r.rows.length};};
+ const store=Object.create(Store.prototype);store.pool={query,connect:async()=>{const prev=tail;let release;tail=new Promise(r=>release=r);await prev;return {query,release};}};
+ try{await store.initialize();const f=await replyFixture(store),first=await f.incoming(401);
+ const sent=await f.g.send(f.a,{to:'person',text:'answer',reply_to_message_id:first.message_id,request_id:'sql-reply-0001'});
+ assert.equal((await f.incoming(402,Number(sent.telegram.message_id))).reply_to_message_id,sent.message_id);
+ await store.pruneGroupTransport(Date.now()+8*86400000);assert.equal((await store.list('telegram_replies')).length,0);
+ }finally{await db.close();}
+});
+test('an immediate Telegram reply waits until the outbound canonical mapping is persisted',async()=>{
+ const f=await replyFixture();
+ // Model independent bot and DM locks, unlike MemoryStore's single global queue.
+ f.store.withBotLock=async(_,fn)=>fn(f.store);
+ f.store.withHeldConnectionLock=(key,fn)=>f.store.withLock(key,fn);
+ const first=await f.incoming(601);let enter,release;
+ const entered=new Promise(r=>enter=r),gate=new Promise(r=>release=r);
+ f.app.telegram=async(_,method,args)=>{if(method==='sendMessage'){enter();await gate;return {message_id:602};}return {};};
+ const sending=f.g.send(f.a,{to:'person',text:'answer',reply_to_message_id:first.message_id,request_id:'immediate-reply-1'});
+ await entered;let received=false;const incoming=f.incoming(603,602).then(m=>{received=true;return m;});
+ await new Promise(r=>setTimeout(r,10));assert.equal(received,false);
+ release();const sent=await sending;assert.equal((await incoming).reply_to_message_id,sent.message_id);
+});
+test('Dot ACK removes inbox content but retains authorized canonical reply mapping',async()=>{
+ const f=await fixture(),dot=await registerAgent(f.app,{owner,authType:'api_key'},{handle:'dot'},{botType:'dot'}),p={owner,agentId:dot.agent_id};
+ await configureHuman(f.app,owner,{human_handle:'person',telegram_user_id:'42'});
+ await f.store.put('bot','123',{id:'123',owner,active:true,token:f.app.encrypt('synthetic'),hookSecret:'hook'});
+ await f.store.put('group_bot','123',{owner,agentId:p.agentId,bindingId:'generation-1'});
+ await f.app.receive('123','hook',{update_id:701,message:{message_id:701,from:{id:42,is_bot:false},chat:{id:42,type:'private'},date:Math.floor(Date.now()/1000),text:'synthetic'}});
+ const inbox=new DotInbox(f.app),message=(await inbox.list(p,{})).messages[0];await inbox.ack(p,{message_ids:[message.message_id]});assert.equal((await inbox.list(p,{})).messages.length,0);
+ const sent=await f.g.send(p,{to:'person',text:'reply after ACK',reply_to_message_id:message.message_id,request_id:'ack-reply-001'});
+ assert.equal(sent.status,'accepted');assert.deepEqual(f.telegram.find(c=>c.method==='sendMessage').args.reply_parameters,{message_id:701});
+});
+test('pre-upgrade send receipts never fabricate a mapping under a new binding',async()=>{
+ const f=await replyFixture();const {hash}=await import('../src/security.js');
+ const args={to:'person',text:'old send',request_id:'pre-upgrade-send'},rid=hash(`send:${f.a.agentId}:${args.request_id}`);
+ await f.store.put('group_receipt',rid,{owner,fingerprint:hash(JSON.stringify(['person','old send',null])),message_id:'msg_old',to:'person',expires:Date.now()+86400000});
+ const sent=await f.g.send(f.a,args);assert.equal(sent.message_id,'msg_old');assert.equal((await f.store.list('telegram_replies')).length,0);
+ const replyArgs={...args,request_id:'pre-upgrade-reply',reply_to_message_id:'tgmsg_old'};
+ await f.store.put('group_receipt',hash(`send:${f.a.agentId}:${replyArgs.request_id}`),{owner,fingerprint:hash(JSON.stringify(['person','old send','tgmsg_old'])),message_id:'msg_old_reply',expires:Date.now()+86400000});
+ await assert.rejects(f.g.send(f.a,replyArgs),/Pre-upgrade reply intent/);assert.equal(f.telegram.filter(c=>c.method==='sendMessage').length,1);
+});
+test('expired DM receipt cannot remap a durable send into a different binding; same scope keeps canonical ID',async()=>{
+ const f=await replyFixture();const {hash}=await import('../src/security.js');const args={to:'person',text:'durable send',request_id:'durable-scope-001'};
+ const sent=await f.g.send(f.a,args),rid=hash(`send:${f.a.agentId}:${args.request_id}`);
+ await f.store.delete('group_receipt',rid);
+ await assert.rejects(f.g.send(f.a,{...args,text:'changed after expiry'}),/reused/);
+ assert.equal((await f.g.send(f.a,args)).message_id,sent.message_id);
+ await f.store.delete('group_receipt',rid);await f.store.put('group_bot','123',{owner,agentId:f.a.agentId,bindingId:'generation-2'});
+ await assert.rejects(f.g.send(f.a,args),/different binding/);
+ assert.equal(f.telegram.filter(c=>c.method==='sendMessage').length,1);
+ assert.equal((await f.store.list('telegram_replies')).some(r=>r.bindingId==='generation-2'),false);
 });

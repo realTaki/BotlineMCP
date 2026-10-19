@@ -172,3 +172,13 @@ test('actual SQL dot unbind removes retained inbox payloads and preserves other 
   await call(f,dot,'telegram_bot_unbind');assert.equal((await f.store.list('dot_inbox',owner)).length,0);assert.equal((await f.store.list('group_delivery',owner)).length,1);
  }finally{await f.db.close();}
 });
+test('unbind deletes only this bot reply metadata without the generic owner scan ceiling',async()=>{
+ const f=await fixture();try{
+  await call(f,f.a,'telegram_bot_bind',{token:token(123)});
+  const values=Array.from({length:1002},(_,i)=>({owner,botId:i===0?'123':'456',entries:[],expires:Date.now()+86400000}));
+  await f.db.query("INSERT INTO mcp_records(kind,id,value) SELECT 'telegram_replies', 'scope_'||ordinality, value FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS x(value,ordinality)",[JSON.stringify(values)]);
+  assert.equal((await call(f,f.a,'telegram_bot_unbind')).unbound,true);
+  const counts=await f.db.query("SELECT value->>'botId' AS bot, count(*) AS n FROM mcp_records WHERE kind='telegram_replies' GROUP BY value->>'botId'");
+  assert.equal(counts.rows.length,1);assert.equal(counts.rows[0].bot,'456');assert.equal(Number(counts.rows[0].n),1001);
+ }finally{await f.db.close();}
+});
