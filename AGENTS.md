@@ -18,7 +18,9 @@
   BotlineMCP must not pretend to create platform tasks or retain a recoverable chat history.
 - When no X-MCP-Bot-Type, X-MCP-Agent-ID, or OAuth session identifies a profile,
   tools/list returns the full catalog and callers pass their own agent_token on
-  tool calls. X-MCP-Bot-Type of dot, grokbot or muse filters tools/list to that connector
+  tool calls. An authenticated unregistered connection is bootstrap and omits
+  `telegram_*`, `human_register`, and `cursor_key_*` until registration.
+  X-MCP-Bot-Type of dot, grokbot or muse filters tools/list to that connector
   type. Profile filtering also applies when the header or OAuth session
   identifies the agent: dot and muse get common tools plus inbox/ACK, other agents common
   tools plus Cursor helpers. Resolve identity first on tools/call, then enforce

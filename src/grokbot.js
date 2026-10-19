@@ -15,14 +15,20 @@ export function normalizeCursorApiKey(value){
 }
 
 const cursorKeyUnreadable=()=>Object.assign(new Error('Stored Cursor API key is unreadable; call cursor_key_set or agent_register with cursor_api_key'),{status:409,relayCode:'cursor_key_unreadable'});
+const cursorKeyRequired=()=>Object.assign(new Error('This instance has no stored Cursor API key. Omit cursor_api_key until the server returns this error, then ask the owner and pass it to cursor_key_set or agent_register.'),{status:409,relayCode:'cursor_key_required'});
 
 export async function storeCursorKey(store,app,owner,key){
  await store.put('cursor_key',owner,{owner,secret:app.encrypt(key),updated:new Date().toISOString()});
 }
 
+export async function hasCursorKey(app,owner){
+ const record=await app.store.get('cursor_key',owner);
+ return !!(record?.secret&&record.owner===owner);
+}
+
 export async function readCursorKey(app,owner){
  const record=await app.store.get('cursor_key',owner);
- if(!record?.secret||record.owner!==owner)throw cursorKeyUnreadable();
+ if(!record?.secret||record.owner!==owner)throw cursorKeyRequired();
  try{return app.decrypt(record.secret);}catch{throw cursorKeyUnreadable();}
 }
 
