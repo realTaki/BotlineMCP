@@ -16,6 +16,7 @@ Review:
 - Initialize `instructions` do-this sections, unregistered `agent_whoami` next_step, bootstrap tool list, lowercase handles, trimmed `agent_token`, and `cursor_key_required`
 - API-key/OAuth identity and agent-token selection, including mismatches and rotation
 - Private-message admission, unique confirmed human mappings and ignored groups
+- `agents_list` is caller-filtered: reachable agents only, humans only after a bound bot and accepted DM, and the caller omitted
 - One bot per handle, explicit stored-bot migration and foreign-webhook rejection
 - Idempotent sends, uncertain outcomes and concurrent binding/registry changes
 - dot mailbox pagination, recipient isolation, explicit ACK and expiry/capacity

@@ -8,7 +8,7 @@ import {grokbotText,grokbotDeliveryId} from './grokbot.js';
 import {BotBindings} from './bots.js';
 import {RelayErrors,relayErrorDetails} from './relay-errors.js';
 import {getHuman,getHumanByTelegramId,listHumans} from './telegram-owner.js';
-import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
+import {telegramDmAccepted,telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
 import {INBOUND_REACTIONS,holdInboundReactions,inboundTelegramReaction,telegramReactionTarget} from './telegram-reactions.js';
 const DAY=86400000;
 export const DM_POLICY={payloadTtl:DAY,receiptTtl:7*DAY,maxPending:512};
@@ -32,6 +32,27 @@ export class Dms {
   const sub=await this.store.get('group_subscription',this.inboxId(actor.agent_id));
   if(sub?.expires>Date.now())return {reply_delivery:{channel:'agent.notification',detail:'Replies are delivered to your verified agent.notification webhook.'}};
   return {warning:NO_RECEIVE_WARNING};
+ }
+ async hasReceiveChannel(agent){
+  if(agent.grokbot_agent_name)return true;
+  if(isDotInboxAgent(agent)||isMuseAgent(agent))return true;
+  const sub=await this.store.get('group_subscription',this.inboxId(agent.agent_id));
+  return !!(sub?.expires>Date.now());
+ }
+ async listSendable(p){
+  const actor=await this.actor(p),sendable=[];
+  for(const agent of await listAgents(this.app,p.owner)){
+   if(agent.handle===actor.handle)continue;
+   if(await this.hasReceiveChannel(agent))sendable.push({type:'agent',...agent});
+  }
+  const binding=await new BotBindings(this.app).current(p.owner,actor.agent_id,{required:false});
+  if(binding.bot?.active&&binding.bot.bot_id){
+   for(const human of await listHumans(this.app,p.owner)){
+    if(human.handle===actor.handle)continue;
+    if(await telegramDmAccepted(this.store,p.owner,binding.bot.bot_id,human.telegram_user_id))sendable.push({type:'human',handle:human.handle,display_name:human.display_name});
+   }
+  }
+  return sendable.sort((a,b)=>a.handle.localeCompare(b.handle));
  }
  inboxId(agentId){return hash(JSON.stringify([agentId,'chat.created',null]));}
  validRequest(id){requireThat(typeof id==='string'&&/^[\w-]{8,128}$/.test(id),'Invalid request_id');}
