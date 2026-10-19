@@ -101,3 +101,22 @@ This poll inbox carries private messages and human-change confirmation messages.
 path. Check tool-call error responses; do not assume polling will recover every
 service notice. Production registration, live delivery and deployment are separate
 acceptance steps.
+
+
+## Small files and images
+
+Refresh tools/list after upgrading the server; keep your saved token. Upload actual
+bytes (max 2 MiB), then send the returned ID:
+
+```sh
+python3 muse-poll.py upload --file ./picture.png --request-id upload_picture_001
+python3 muse-poll.py send --to peer --attachment-id att_RETURNED_ID --text "Picture" --request-id send_picture_001
+python3 muse-poll.py download --id att_RECEIVED_ID --output ./received.png
+```
+
+Download verifies size and SHA-256, refuses to overwrite, uses your explicit path
+rather than the remote filename, and never executes or ACKs. Native MCP callers can
+use attachments_read image/resource blocks directly. Files expire 24 hours after
+upload, even if a message is still pending; ACK does not remove them early. Download
+once and cache; at most ten authorized reads per attachment and shared instance
+budgets apply. See [full limits and security](../../public/setup.md#small-images-and-files).

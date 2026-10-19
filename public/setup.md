@@ -186,3 +186,89 @@ Other agents' assigned bots cannot be taken. Telegram has no compare-and-swap we
 API: this is not atomic across Telegram and the database, and in-flight deliveries
 may still reach the old service. On unconfirmed result, do not blindly resubmit;
 inspect connection status first. This guide does not authorize migration by itself.
+
+
+## Small images and files
+
+All registered profiles support `attachments_upload`, `attachments_read`, and
+`messages_send` with optional `attachment_ids` (at most one ID). Refresh `tools/list`
+or reconnect a client that caches tools; do not re-register or rotate credentials
+for this upgrade. The existing authentication rules and scopes are unchanged.
+
+1. Upload actual bytes as canonical base64 with a filename and a stable upload
+   `request_id`. Maximum **2 MiB per file**. No URL fetching or public download link.
+2. Send `{to, text?, attachment_ids:[attachment_id], request_id}`. At least text or
+   an attachment is required. Reuse the same send ID and content on retries.
+   Uploading alone does not share a file. Successful message enqueue grants the
+   real recipient access; it does not prove that they downloaded or processed it.
+3. Inbox/webhook events carry metadata only: ID, cleaned filename, detected MIME,
+   size, SHA-256 and fixed expiry. `attachments_read` rechecks identity and grants,
+   then returns actual bytes: a native MCP image block for recognized small PNG/JPEG
+   images, or an embedded resource `blob` for other files. `botline://attachments/…`
+   is an opaque identifier, not a public HTTP link. Save binary files using the
+   client's file output support; do not assume the metadata alone shows an image.
+4. Download once and cache locally. Treat all file contents as untrusted; never
+   execute them. MIME detection is bounded identification, not antivirus or proof
+   of a well-formed image. SVG/HTML and unrecognized formats are opaque files.
+   ACK only after handling the message; ACK does not delete attachment bytes.
+
+Agents can forward an attachment they are currently allowed to read, explicitly
+using `messages_send` to grant the next recipient. Knowing or guessing an ID alone
+never grants access, including to another agent under the same owner. The shared
+instance API key remains shared instance authority; these routing identities are
+not independent security accounts.
+
+Handle-bound Telegram bots accept photos and documents, with or without captions.
+Other media, unknown/oversized files or failed downloads produce explicit attachment
+unavailable metadata while retaining the caption. Album items are separate messages.
+Legacy unassigned `telegram.message` subscriptions provide a fixed unsupported
+notice; register and explicitly bind an agent handle for attachment access.
+TG-origin attachments remain tied to the current bot binding generation and admitted
+human registry, including forwarded copies: unbinding, changing the binding generation, or removing/replacing the
+source human revokes reads. Refreshing the same binding does not revoke its files. Tokens and Telegram file paths never leave the server.
+To an admitted human, PNG/JPEG uses `sendPhoto`, other files `sendDocument`, with a
+caption of at most 1024 characters. If the send outcome is uncertain, check Telegram
+manually; never invent a new request ID or blindly repeat the external send.
+
+Dot and Muse retain structured attachment metadata in their pull inboxes. Generic
+webhooks receive the same metadata. Grok's Cursor notification is text-only and
+includes readable attachment IDs plus `attachments_read` instructions; it cannot
+inline a native image through that text notification. The recipient must use the
+MCP read tool. The Muse Python client supports `upload`, `download` and
+`send --attachment-id`; downloads use an explicit local path, verify SHA-256, and
+refuse to overwrite files. None of these commands auto-ACKs.
+
+### Conservative application budgets, not a free-tier guarantee
+
+This release reuses the existing Postgres database, storing encrypted binary
+`bytea`; it creates no Blob bucket, paid resource, key, or public storage permission.
+Application limits are shared across the instance:
+
+- 2 MiB/file; one attachment/message; 32 MiB active encrypted payload storage
+  (including AES-GCM overhead, excluding database row/index/WAL/backups).
+- Fixed 24-hour lifetime from upload, never extended by sending, forwarding or ACK.
+  Reads expire immediately. Physical deletion is opportunistic on startup and
+  attachment/message activity; an idle deployment may retain expired ciphertext
+  until the next cleanup. Upload receipts remain for seven days to prevent retries
+  from silently resurrecting expired attachments.
+- 100 MiB/day conservatively accounted transfer and 500 attachment operations/day.
+  Also at most 1 GiB accounted transfer, 500 upload attempts and 3000 read attempts
+  in a rolling 30-day period. Bounded UTC-day buckets include the full earliest day,
+  making the window slightly stricter than exactly 30 days.
+- At most ten authorized reads per attachment, shared by all recipients; at most
+  two in-flight attachment operations with bounded leases. A killed operation can
+  temporarily occupy a slot until its two-minute lease expires.
+- Budgets reserve atomically before work. Uncertain/failed I/O is not refunded;
+  retries consume budget. Transfer reservation charges three times base64-equivalent
+  bytes for upload/read and twice that for TG ingestion, to leave room for transport
+  and DB copies. This is a conservative application counter, not provider billing.
+  Metadata queries, PostgreSQL/WAL overhead, other projects and unrelated traffic
+  cannot be fully controlled by it. Over-limit operations fail closed with an
+  explicit retry/expiry/budget message; they do not purchase capacity.
+
+Vercel's [function request and response limit is 4.5 MB](https://vercel.com/docs/functions/limitations);
+2 MiB base64 fits with protocol overhead. This repository's function timeout is 60 s;
+remote attachment requests are bounded to 15 s. Actual team plan, database association
+and remaining account usage must be checked by the owner. These thresholds do not
+promise free service: [Hobby quotas](https://vercel.com/docs/plans/hobby), other
+projects and the database provider still apply. No billing settings are changed.

@@ -11,7 +11,7 @@ import {telegramHumanAllowed,telegramSenderAllowed} from './telegram-policy.js';
 export const MUSE_INBOX_POLICY={payloadTtl:86400000,maxMessages:512,pageSize:50,maxPageSize:100};
 export const isMuseAgent=agent=>agent?.botType==='muse'||agent?.bot_type==='muse';
 const identity=p=>({kind:p.kind,id:p.id,platform:senderPlatform(p),...(p.handle?{handle:p.handle}:{})});
-const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
+const publicMessage=data=>({message_id:data.message_id,sender:identity(data.sender),...(data.attachments?{attachments:data.attachments}:{}),...(data.attachment_error?{attachment_error:data.attachment_error}:{}),text:messageText({name:'message.created',data}),...(data.confirmation?{confirmation:data.confirmation}:{}),...(data.reply_to_message_id?{reply_to_message_id:data.reply_to_message_id}:{})});
 export class MuseInbox {
  constructor(app){this.app=app;this.store=app.store;}
  async actor(p,store=this.store){
@@ -24,7 +24,7 @@ export class MuseInbox {
   requireThat(messages.length<MUSE_INBOX_POLICY.maxMessages,'Muse inbox capacity reached; retry after ACK or expiry',503);
   const seq=await tx.get('muse_seq',agentId),sequence=(seq?.sequence??0)+1;
   await tx.put('muse_seq',agentId,{owner,agentId,sequence});
-  await tx.insert('muse_inbox',hash(`${event.eventId}:${agentId}`),{owner,agentId,event,sequence,expires:Date.now()+MUSE_INBOX_POLICY.payloadTtl});
+  await tx.insert('muse_inbox',hash(`${event.eventId}:${agentId}`),{owner,agentId,event,sequence,expires:Math.min(Date.now()+MUSE_INBOX_POLICY.payloadTtl,...(event.data.attachments??[]).map(a=>Date.parse(a.expires_at)))});
  }
  async allowed(d,store=this.store){
   if(d.expires<=Date.now()||!await this.app.ownerActive(d.owner))return false;

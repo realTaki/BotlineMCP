@@ -46,7 +46,7 @@ test('legacy routes remain untouched and ambiguous assignments fail closed',asyn
 });
 test('public list is the full catalog and rejects retired public calls',async()=>{
  const app=new App({}),names=(await app.rpc(null,'tools/list')).tools.map(t=>t.name);
- assert.deepEqual(names,tools.map(t=>t.name));assert.equal(names.length,13);
+ assert.deepEqual(names,tools.map(t=>t.name));assert.equal(names.length,15);
  for(const n of ['chats_create','chats_list','bot_disconnect','bot_reconnect','bot_groups_enable','telegram_send_message','delivery_retry','bot_list','bot_access_get','telegram_whitelist_update','bot_access_update'])assert(!names.includes(n));
  for(const n of ['delivery_retry','__delivery_retry_internal','bot_access_get','telegram_whitelist_update','bot_access_update'])await assert.rejects(app.rpc(owner,'tools/call',{name:n,arguments:{}}),/retired/);
 });

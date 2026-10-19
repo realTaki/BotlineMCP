@@ -28,6 +28,9 @@ pending mail: wake a worker, deduplicate effects by message_id, then `ack`
 the handled message_ids. A crash before ACK must leave messages replayable.
 """
 import argparse
+import base64
+import hashlib
+from pathlib import Path
 import json
 import os
 import sys
@@ -158,12 +161,14 @@ class Client:
             return result
         raise McpError(f"initialize failed for all protocol versions: {last}")
 
-    def call_tool(self, name, arguments):
+    def call_tool(self, name, arguments, native=False):
         result = self._post("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
             texts = [b.get("text", "") for b in result.get("content", [])
                      if isinstance(b, dict)]
             raise McpError("tool error: " + " | ".join(texts))
+        if native:
+            return result
         if isinstance(result.get("structuredContent"), dict):
             return result["structuredContent"]
         texts = [b.get("text", "") for b in result.get("content", [])
@@ -239,10 +244,42 @@ def cmd_send(client, args):
         "agent_token": args.token,
         "to": args.to,
         "text": args.text,
+        **({"attachment_ids": [args.attachment_id]} if getattr(args, "attachment_id", None) else {}),
         "request_id": args.request_id,
         **({"reply_to_message_id": args.reply_to} if args.reply_to else {}),
     })
     print(json.dumps(result, ensure_ascii=False))
+
+
+def cmd_upload(client, args):
+    with open(args.file, "rb") as file:
+        data = file.read(2 * 1024 * 1024 + 1)
+    if not data or len(data) > 2 * 1024 * 1024:
+        raise McpError("attachment must be 1 byte to 2 MiB")
+    result = client.call_tool("attachments_upload", {"agent_token": args.token,
+        "request_id": args.request_id, "name": Path(args.file).name,
+        "data": base64.b64encode(data).decode("ascii")})
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def cmd_download(client, args):
+    result = client.call_tool("attachments_read", {"agent_token": args.token,
+        "attachment_id": args.id}, native=True)
+    metadata = result.get("structuredContent", {})
+    blobs = [b.get("data") if b.get("type") == "image" else b.get("resource", {}).get("blob")
+             for b in result.get("content", []) if b.get("type") in ("image", "resource")]
+    if len(blobs) != 1 or not isinstance(blobs[0], str) or len(blobs[0]) > 2796204:
+        raise McpError("invalid attachment response")
+    try:
+        data = base64.b64decode(blobs[0], validate=True)
+    except ValueError:
+        raise McpError("invalid attachment base64") from None
+    if metadata.get("attachment_id") != args.id or len(data) != metadata.get("size") or hashlib.sha256(data).hexdigest() != metadata.get("sha256"):
+        raise McpError("attachment integrity mismatch")
+    # Explicit user path only; never derive a local path from the remote filename.
+    with open(args.output, "xb") as file:
+        file.write(data)
+    print(json.dumps({**metadata, "saved_to": args.output}, ensure_ascii=False))
 
 
 def main():
@@ -264,10 +301,17 @@ def main():
 
     send = sub.add_parser("send", help="send a DM to a handle")
     send.add_argument("--to", required=True)
-    send.add_argument("--text", required=True)
+    send.add_argument("--text", default="")
+    send.add_argument("--attachment-id")
     send.add_argument("--request-id", required=True, help="stable ID for this send; reuse on every retry")
     send.add_argument("--reply-to")
 
+    upload = sub.add_parser("upload", help="upload a file up to 2 MiB")
+    upload.add_argument("--file", required=True)
+    upload.add_argument("--request-id", required=True)
+    download = sub.add_parser("download", help="save authorized bytes; never overwrite or execute")
+    download.add_argument("--id", required=True)
+    download.add_argument("--output", required=True)
     args = parser.parse_args()
     url = need_env("BOTLINE_MCP_URL")
     api_key = need_env("BOTLINE_MCP_API_KEY")
@@ -280,8 +324,8 @@ def main():
             args.token = need_env("BOTLINE_AGENT_TOKEN")
             client = Client(url, bearer=api_key)
             client.initialize()
-            {"whoami": cmd_whoami, "poll": cmd_poll, "ack": cmd_ack, "send": cmd_send}[args.command](client, args)
-    except McpError as err:
+            {"whoami": cmd_whoami, "poll": cmd_poll, "ack": cmd_ack, "send": cmd_send, "upload": cmd_upload, "download": cmd_download}[args.command](client, args)
+    except (McpError, OSError) as err:
         print(f"error: {err}", file=sys.stderr)
         raise SystemExit(1)
 

@@ -89,3 +89,9 @@
 - Verify the deployed version and actual integrations only when authorized.
   Report any remaining blocker, untested stage or limitation clearly.
 
+
+- Attachments use authenticated opaque IDs, recipient grants from actual sends,
+  fixed TTL independent of ACK, and existing encrypted Postgres storage. Preserve
+  atomic application budgets and no-public-URL policy. Never put binary bytes in
+  inbox/wake/notification payloads. MIME identification is not content trust.
+  Treat setup.md as the authoritative user-facing attachment/limits guide.

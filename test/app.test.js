@@ -50,7 +50,7 @@ test('instance authentication requires a Bearer credential and rejects legacy ag
  const f=fixture();assert.equal(f.app.instanceKeyHash,hash(instanceKey));
  const rpc=JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'agent_whoami',arguments:{}}});
  const accepted=await httpRequest(f.app,'/mcp','POST',rpc,{authorization:'Bearer '+instanceKey});
- assert.equal(accepted.statusCode,200);assert.deepEqual(JSON.parse(accepted.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
+ assert.equal(accepted.statusCode,200);assert.deepEqual(JSON.parse(accepted.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.23',tool_profile:'bootstrap',available_tool_names:published});
  for(const authorization of [undefined,instanceKey,'Basic '+instanceKey,'Bearer ','Bearer wrong',[instanceKey]])assert.equal((await httpRequest(f.app,'/mcp','POST',rpc,{authorization})).statusCode,401);
  const retired=new App({store:f.store,key,origin:f.app.origin,instanceKey,agents:[{id:'old-agent',tokenHash:hash('old-key')}]});
  assert.equal((await httpRequest(retired,'/mcp','POST',rpc,{authorization:'Bearer old-key'})).statusCode,401);
@@ -140,7 +140,7 @@ test('instance OAuth session shares authority; key rotation revokes access and r
  assert.equal(approved.statusCode,303);
  const code=new URL(approved.headers.Location).searchParams.get('code');
  const tokens=JSON.parse((await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:p.client_id,redirect_uri:p.redirect_uri,resource:p.resource,code,code_verifier:verifier,grant_type:'authorization_code'}).toString())).body);
- assert.deepEqual(JSON.parse((await mcp(f.app,tokens.access_token,'agent_whoami')).body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
+ assert.deepEqual(JSON.parse((await mcp(f.app,tokens.access_token,'agent_whoami')).body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.23',tool_profile:'bootstrap',available_tool_names:published});
  f.app.instanceKeyHash=hash('replacement-instance-key');
  assert.equal((await mcp(f.app,tokens.access_token,'bot_list')).statusCode,401);
  assert.equal((await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:p.client_id,resource:p.resource,grant_type:'refresh_token',refresh_token:tokens.refresh_token}).toString())).statusCode,401);
@@ -181,7 +181,7 @@ test('discovery documents agent-first recovery, minimal friction and retired for
 test('single instance key shares authority; retired invitations and old agent credentials rejected',async()=>{
  const f=fixture();
  const who=JSON.parse((await mcp(f.app,instanceKey,'agent_whoami')).body).result.structuredContent;
- assert.deepEqual(who,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
+ assert.deepEqual(who,{registered:false,agent_id:null,server_version:'0.6.23',tool_profile:'bootstrap',available_tool_names:published});
  await f.app.bind(INSTANCE_ID,bind);
  assert.equal((await f.app.invoke(INSTANCE_ID,'bot_list')).bots.length,1);
  assert.equal((await mcp(f.app,'wrong-key','bot_list')).statusCode,401);
@@ -197,7 +197,7 @@ test('legacy instance OAuth grants remain valid while retired agent grants are r
  const legacyAccess='legacy-access',legacyRefresh='legacy-refresh',expires=Date.now()+60000;
  await f.store.put('access',hash(legacyAccess),{owner:INSTANCE_ID,resource,expires});
  await f.store.put('refresh',hash(legacyRefresh),{owner:INSTANCE_ID,client_id:clientId,resource,expires});
- const who=await mcp(f.app,legacyAccess,'agent_whoami');assert.equal(who.statusCode,200);assert.deepEqual(JSON.parse(who.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.22',tool_profile:'bootstrap',available_tool_names:published});
+ const who=await mcp(f.app,legacyAccess,'agent_whoami');assert.equal(who.statusCode,200);assert.deepEqual(JSON.parse(who.body).result.structuredContent,{registered:false,agent_id:null,server_version:'0.6.23',tool_profile:'bootstrap',available_tool_names:published});
  const refreshed=await httpRequest(f.app,'/oauth/token','POST',new URLSearchParams({client_id:clientId,resource,refresh_token:legacyRefresh,grant_type:'refresh_token'}).toString());
  assert.equal(refreshed.statusCode,200);const tokens=JSON.parse(refreshed.body);assert(tokens.access_token);
  assert.equal((await f.store.get('access',hash(tokens.access_token))).authVersion,hash(instanceKey));
@@ -354,8 +354,8 @@ const profileNames=res=>JSON.parse(res.body).result.tools.map(t=>t.name);
 test('HTTP tools/list uses authenticated stored identity; no-identity lists the full catalog and auth errors never fall back',async()=>{
  const f=await profileFixture();
  for(const headers of [{},{authorization:'Bearer '+instanceKey},{authorization:'Bearer oauth-fresh'}])assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{},headers)),published);
- const dot=profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer oauth-dot'}));assert.equal(dot.length,11);assert(dot.includes('messages_inbox'));assert(dot.includes('messages_ack'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));assert(!dot.includes('cursor_key_clear'));assert(!dot.includes('telegram_whitelist_update'));
- const bot=profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'}));assert.equal(bot.length,11);assert(bot.includes('cursor_key_set'));assert(bot.includes('cursor_key_clear'));assert(bot.includes('agent_token_rotate'));assert(!bot.includes('messages_inbox'));assert(!bot.includes('messages_ack'));assert(bot.includes('agent_register'));assert(bot.includes('telegram_bot_bind'));assert(!bot.includes('telegram_whitelist_update'));
+ const dot=profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer oauth-dot'}));assert.equal(dot.length,13);assert(dot.includes('messages_inbox'));assert(dot.includes('messages_ack'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));assert(!dot.includes('cursor_key_clear'));assert(!dot.includes('telegram_whitelist_update'));
+ const bot=profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'}));assert.equal(bot.length,13);assert(bot.includes('cursor_key_set'));assert(bot.includes('cursor_key_clear'));assert(bot.includes('agent_token_rotate'));assert(!bot.includes('messages_inbox'));assert(!bot.includes('messages_ack'));assert(bot.includes('agent_register'));assert(bot.includes('telegram_bot_bind'));assert(!bot.includes('telegram_whitelist_update'));
  assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer oauth-bot'})),bot);
  assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{profile:'bot'}, {authorization:'Bearer oauth-dot','x-mcp-agent-id':'agent_bot'})),dot);
  assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_webhook'})),bot);
@@ -441,7 +441,7 @@ test('whoami diagnostics use the same tool selection as authenticated discovery 
  const f=await profileFixture();
  for(const [headers,profile] of [[{authorization:'Bearer oauth-dot'},'dot'],[{authorization:'Bearer oauth-bot'},'bot'],[{authorization:'Bearer oauth-fresh'},'bootstrap'],[{authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'},'bot']]){
   const before=structuredClone([...f.store.data]);const result=JSON.parse((await profileRpc(f.app,'tools/call',{name:'agent_whoami',arguments:{}},headers)).body).result.structuredContent;
-  assert.equal(result.server_version,'0.6.22');assert.equal(result.tool_profile,profile);
+  assert.equal(result.server_version,'0.6.23');assert.equal(result.tool_profile,profile);
   assert.deepEqual(result.available_tool_names,profileNames(await profileRpc(f.app,'tools/list',{},headers)));
   assert.deepEqual([...f.store.data],before);assert(!JSON.stringify(result).includes(instanceKey));assert(!JSON.stringify(result).includes('oauth-dot'));
   assert.equal(result.agent_token,undefined);assert.equal(result.tokenHash,undefined);
@@ -478,12 +478,12 @@ test('handle argument no longer selects identity',async()=>{
 });
 test('tools/list without identity returns the full catalog; identified agents keep their profiles',async()=>{
  const f=await profileFixture();
- assert.equal(published.length,13);assert(published.includes('agent_token_rotate'));
+ assert.equal(published.length,15);assert(published.includes('agent_token_rotate'));
  for(const headers of [{},{authorization:'Bearer '+instanceKey},{authorization:'Bearer oauth-fresh'}])assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{},headers)),published);
  const bot=profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer '+instanceKey,'x-mcp-agent-id':'agent_bot'}));
- assert.equal(bot.length,11);assert(bot.includes('cursor_key_set'));assert(bot.includes('cursor_key_clear'));assert(bot.includes('agent_token_rotate'));assert(!bot.includes('messages_inbox'));
+ assert.equal(bot.length,13);assert(bot.includes('cursor_key_set'));assert(bot.includes('cursor_key_clear'));assert(bot.includes('agent_token_rotate'));assert(!bot.includes('messages_inbox'));
  const dot=profileNames(await profileRpc(f.app,'tools/list',{}, {authorization:'Bearer oauth-dot'}));
- assert.equal(dot.length,11);assert(dot.includes('messages_inbox'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));
+ assert.equal(dot.length,13);assert(dot.includes('messages_inbox'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));
  for(const name of ['bot_begin_binding','telegram_whitelist_update','telegram_send_message','delivery_retry'])assert(!published.includes(name));
 });
 test('resolved bot token cannot call inbox or ack tools',async()=>{
@@ -531,13 +531,13 @@ test('tool-call identity resolution does not mutate the request principal',async
 test('X-MCP-Bot-Type filters tools/list and must match the resolved agent on call',async()=>{
  const f=await profileFixture();
  const key={authorization:'Bearer '+instanceKey};
- assert.equal(profileNames(await profileRpc(f.app,'tools/list',{},key)).length,13);
+ assert.equal(profileNames(await profileRpc(f.app,'tools/list',{},key)).length,15);
  const grok=profileNames(await profileRpc(f.app,'tools/list',{},{...key,'x-mcp-bot-type':'grokbot'}));
- assert.equal(grok.length,11);assert(grok.includes('cursor_key_set'));assert(grok.includes('agent_token_rotate'));assert(!grok.includes('messages_inbox'));
+ assert.equal(grok.length,13);assert(grok.includes('cursor_key_set'));assert(grok.includes('agent_token_rotate'));assert(!grok.includes('messages_inbox'));
  const dot=profileNames(await profileRpc(f.app,'tools/list',{},{...key,'x-mcp-bot-type':'dot'}));
- assert.equal(dot.length,11);assert(dot.includes('messages_inbox'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));
+ assert.equal(dot.length,13);assert(dot.includes('messages_inbox'));assert(dot.includes('agent_token_rotate'));assert(!dot.includes('cursor_key_set'));
  const muse=profileNames(await profileRpc(f.app,'tools/list',{},{...key,'x-mcp-bot-type':'muse'}));
- assert.equal(muse.length,11);assert(muse.includes('messages_inbox'));assert(muse.includes('agent_token_rotate'));assert(!muse.includes('cursor_key_set'));
+ assert.equal(muse.length,13);assert(muse.includes('messages_inbox'));assert(muse.includes('agent_token_rotate'));assert(!muse.includes('cursor_key_set'));
  assert.deepEqual(profileNames(await profileRpc(f.app,'tools/list',{},{'x-mcp-bot-type':'grokbot'})),grok);
  const invalid=await profileRpc(f.app,'tools/list',{},{'x-mcp-bot-type':'claude'});
  assert.equal(invalid.statusCode,400);assert.match(invalid.body,/X-MCP-Bot-Type must be dot, grokbot or muse/);
@@ -591,7 +591,7 @@ test('agent_token_rotate invalidates the previous token',async()=>{
 test('production entry preserves anonymous catalog and authenticated exact profiles',async()=>{
  const {createEntrypoint}=await import('../api/index.js'),f=await profileFixture();
  let starts=0;const entry=createEntrypoint(()=>{starts++;return {serve:handler(f.app),initialized:Promise.resolve()};});
- const all=['agent_register','agent_token_rotate','cursor_key_set','cursor_key_clear','agents_list','human_register','messages_inbox','messages_ack','messages_send','telegram_bot_get','agent_whoami','telegram_bot_bind','telegram_bot_unbind'];
+ const all=['agent_register','agent_token_rotate','cursor_key_set','cursor_key_clear','agents_list','human_register','messages_inbox','messages_ack','messages_send','attachments_upload','attachments_read','telegram_bot_get','agent_whoami','telegram_bot_bind','telegram_bot_unbind'];
  const dot=all.filter(n=>!['cursor_key_set','cursor_key_clear'].includes(n)),bot=all.filter(n=>!['messages_inbox','messages_ack'].includes(n));
  async function list(headers={}){const wire=modernWire(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'}),headers);const req=Readable.from([wire.body]);Object.assign(req,{url:'/mcp',method:'POST',headers:wire.headers});const res={setHeader(){},end(body){this.body=body;}};await entry(req,res);return res;}
  assert.deepEqual(profileNames(await list()),all);assert.equal(starts,0);
@@ -656,12 +656,12 @@ test('modern production discovery and fresh OAuth tools use stateless envelopes 
  }
  assert.equal((await request('tools/list',{}, {origin:f.app.origin})).statusCode,200);
  for(const method of ['initialize','ping']){const rejected=await request(method);assert.equal(rejected.statusCode,404);assert.equal(rejected.value.error.code,-32601);}
- const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.22');
+ const discovery=await request('server/discover');assert.equal(discovery.statusCode,200);assert.deepEqual(discovery.value.result.supportedVersions,['2026-07-28']);assert.equal(discovery.value.result._meta['io.modelcontextprotocol/serverInfo'].version,'0.6.23');
  const auth={authorization:'Bearer oauth-fresh'};
- const fresh=await request('tools/list',{},auth);assert.equal(fresh.value.result.tools.length,13);assert.equal(fresh.value.result.resultType,'complete');
+ const fresh=await request('tools/list',{},auth);assert.equal(fresh.value.result.tools.length,15);assert.equal(fresh.value.result.resultType,'complete');
  const who=await request('tools/call',{name:'agent_whoami',arguments:{}},auth);assert.equal(who.value.result.structuredContent.registered,false);assert.equal(who.value.result.resultType,'complete');
  const reg=await request('tools/call',{name:'agent_register',arguments:{handle:'dot'}},auth);assert(reg.value.result);
- const dot=await request('tools/list',{},auth);assert.equal(dot.value.result.tools.length,11);assert(dot.value.result.tools.some(t=>t.name==='messages_inbox'));assert(!dot.value.result.tools.some(t=>t.name==='cursor_key_set'));
+ const dot=await request('tools/list',{},auth);assert.equal(dot.value.result.tools.length,13);assert(dot.value.result.tools.some(t=>t.name==='messages_inbox'));assert(!dot.value.result.tools.some(t=>t.name==='cursor_key_set'));
  assert.equal((await request('tools/list',{}, {authorization:'Bearer invalid'})).statusCode,401);
  assert.equal((await request('tools/call',{name:'agent_whoami',arguments:{}})).statusCode,401);
  const cases=[
@@ -701,7 +701,7 @@ test('Streamable HTTP GET is an SSE stream and POST honors Accept event-stream',
  assert.equal(notice.statusCode,202);assert.equal(notice.body??'','');
  const who=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{...accept,'mcp-protocol-version':'2025-06-18'});
  assert.equal(who.statusCode,200);assert.equal(who.headers['Content-Type'],'text/event-stream');
- const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.22');
+ const result=sseJson(who.body).result;assert.equal(result.structuredContent.registered,false);assert.equal(result.structuredContent.server_version,'0.6.23');
  const jsonWho=await rawMcp(f.app,'POST',JSON.stringify({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'agent_whoami',arguments:{}}}),{authorization:'Bearer '+instanceKey,'mcp-protocol-version':'2025-06-18','accept':'application/json'});
  assert.equal(jsonWho.headers['Content-Type'],'application/json');assert.equal(JSON.parse(jsonWho.body).result.structuredContent.registered,false);
 });

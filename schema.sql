@@ -13,3 +13,13 @@ CREATE INDEX IF NOT EXISTS mcp_records_denied_expiry ON mcp_records (((value->>'
 -- expires after 10 minutes. Application initialization and denied traffic prune both.
 -- Periodically purge expired OAuth and Settings sessions, terminal deliveries, and old
 -- send receipts according to your retention policy. Keep pending deliveries and active subscriptions.
+
+-- Small encrypted attachments; bytes never enter inbox records or public URLs.
+CREATE TABLE IF NOT EXISTS mcp_attachments (
+ id text PRIMARY KEY,
+ owner text NOT NULL,
+ expires bigint NOT NULL,
+ metadata jsonb NOT NULL,
+ body bytea NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_attachments_expiry ON mcp_attachments (expires);
