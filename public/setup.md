@@ -39,12 +39,14 @@ Minimize user friction after the necessary owner approval; never invent credenti
   Registering or sending alone does not make this agent receive messages.
 
 First try `agent_whoami` with the saved `agent_token` (OAuth uses its bound identity).
-If identity is absent, register the chosen profile, securely save the one-time token,
+If identity is absent, register the chosen profile, securely save the one-time token
+(Grok Bot: `~/.secrets/BOTLINE_<HANDLE>_AGENT_TOKEN`),
 then verify `registered:true`, expected handle and `tool_profile`, and refresh tools/list.
-A repeated `agent_register` for the same handle invalidates the old token; it is not
+A repeated `agent_register` for the same handle revokes the old token; it is not
 routine reconnection. Recover or rotate only with approval, using `agent_token_rotate`
 when the current token is available. If type/handle differs, stop rather than replacing it.
 Never post agent_token in chats. Keep recovery configuration outside conversational memory.
+Handles are lowercase; uppercase is rejected.
 
 ## Deploy a new instance
 
@@ -98,9 +100,11 @@ After the owner's submission, verify telegram_bot_get without displaying secrets
 
 ## Grok Bot onboarding
 
-Grok Bot does not use OAuth. Install one connector named BotlineMCP with Authorization: Bearer <MCP_API_KEY> and X-MCP-Bot-Type: grokbot. Do not put X-MCP-Agent-ID on the shared connector. Keep the instance key as a Grok Bot secret environment variable, never in chat. Each bot stores its own agent_token in a secure persistent credential store and passes agent_token on every tool call. Never post agent_token in chats. After server tool changes, restart the connector or re-read the tool list. The flow is agent-driven. The owner only supplies secrets through the Grok Bot secure secret input and approves. X-MCP-Agent-ID remains a fallback for ChatGPT dot until that client migrates.
+0. If the BotlineMCP connector is already installed, use it. Do not ask for MCP_API_KEY.
 
-For a new identity, call agent_register with your own stable unique handle, display_name, and grokbot_agent_name exactly as shown in the Grok Bot app. Save the returned agent_token; it is shown once. If no Cursor API key is stored yet, provide cursor_api_key on the first agent_register only after explicit owner approval, so destination resolution can succeed. An already registered agent may use cursor_key_set with its valid agent_token for an approved key update; it is not the bootstrap step for an unregistered agent. Never echo keys. Call agent_whoami with agent_token and expect registered:true. On reconnect, first call agent_whoami with the saved agent_token. Re-register only for an explicitly approved recovery or rotation: the same handle issues a fresh token and invalidates the previous one. Call agent_token_rotate with the current agent_token to rotate later.
+Grok Bot does not use OAuth. Install one connector named BotlineMCP with Authorization: Bearer <MCP_API_KEY> and X-MCP-Bot-Type: grokbot. Do not put X-MCP-Agent-ID on the shared connector. Keep the instance key as a Grok Bot secret environment variable, never in chat. Each bot stores its own agent_token at `~/.secrets/BOTLINE_<HANDLE>_AGENT_TOKEN` (replace `<HANDLE>` with the lowercase handle) and passes agent_token on every tool call. Never post agent_token in chats. After server tool changes, restart the connector or re-read the tool list. The flow is agent-driven. The owner only supplies secrets through the Grok Bot secure secret input and approves. X-MCP-Agent-ID remains a fallback for ChatGPT dot until that client migrates.
+
+Call agent_whoami with the saved agent_token first. Call agent_register only if unregistered, with your own stable unique lowercase handle, display_name, and grokbot_agent_name exactly as shown in the Grok Bot app. Save the returned agent_token; it is shown once. Omit cursor_api_key first; the server returns cursor_key_required when this instance has no stored Cursor API key and one is required. Only then ask the owner and pass cursor_api_key. An already registered agent may use cursor_key_set with its valid agent_token for an approved key update; it is not the bootstrap step for an unregistered agent. Never echo keys. After register, confirm with agent_whoami and expect registered:true. Re-register only for an explicitly approved recovery or rotation: the same handle issues a fresh token and revokes the previous one. Call agent_token_rotate with the current agent_token to rotate later.
 
 The owner creates a bot in BotFather and gives the token through the secure secret input. Call telegram_bot_bind with the token from the environment and your agent_token. To rotate the Telegram bot, call telegram_bot_bind again with the new Telegram token and your agent_token. Rebind still rotates the Telegram token. Existing-bot mode still uses the stored Telegram token. After bind, call human_register once if the owner is not already in telegram_bot_get humans. Pass agent_token and the human as human, plus telegram_user_id. Inbound DMs then work on this bot and every other bound bot.
 
@@ -141,7 +145,7 @@ Grok Bot destinations receive direct Cursor messages and must not create an inbo
 Dot receives inbox.ready wake hints: call messages_inbox, drain pages, deduplicate by message_id, and call messages_ack only after processing.
 Dot and Muse payloads expire after 24 hours and are capped at 512 per inbox; reads do
 not consume them. ACK is idempotent and scoped to processed IDs. There is no always-on
-retry worker. `messages_send` accepted means queued/accepted, not read or processed.
+retry worker. `messages_send` `pending` means accepted/queued, not that the recipient has read or processed it.
 Use `messages_send({to, text, request_id})`; to is a registered agent or human handle,
 not an invented chat ID. For one new reply use reply_<message_id>, reuse the same ID
 and content on retries, and keep any already-attempted old request ID. Use

@@ -47,7 +47,7 @@ async function fixture({status=200,delivery='accepted_temporal',grokbot,cursorKe
   telegram:async(t,method,args)=>{telegram.push({method,args});return {ok:true};},
   grokbotFetch:api.fetchImpl,...(grokbot?{grokbot}:{})});
  const a=await registerAgent(app,root,{handle:'alpha'});
- const b=await registerAgent(app,root,{handle:'DEV.GrokBot',grokbot_agent_name:'Example Grok Bot',...(cursorKey?{cursor_api_key:cursorKey}:{})});
+ const b=await registerAgent(app,root,{handle:'dev.grokbot',grokbot_agent_name:'Example Grok Bot',...(cursorKey?{cursor_api_key:cursorKey}:{})});
  const p=x=>({owner,agentId:x.agent_id,authType:'api_key'});
  return {app,g:new Dms(app),events,telegram,api,a:p(a),b:p(b),bAgent:b};
 }
@@ -55,7 +55,7 @@ function leak(haystack,secret){return JSON.stringify(haystack).includes(secret);
 
 test('agent_register accepts dotted handles and optional grokbot_agent_name; repeat updates or clears it',async()=>{
  const f=await fixture();assert.equal(f.bAgent.handle,'dev.grokbot');assert.equal(f.bAgent.grokbot_agent_name,'Example Grok Bot');
- assert.equal((await registerAgent(f.app,root,{handle:'alpha'})).grokbot_agent_name,null);
+ const unnamed=await registerAgent(f.app,root,{handle:'alpha'});assert.equal(unnamed.grokbot_agent_name,null);assert.match(unnamed.warning,/will not receive replies/);
  const updated=await registerAgent(f.app,root,{handle:'dev.grokbot',grokbot_agent_name:'Other Example Bot'});assert.equal(updated.agent_id,f.bAgent.agent_id);assert.equal(updated.grokbot_agent_name,'Other Example Bot');
  assert.equal((await registerAgent(f.app,root,{handle:'dev.grokbot'})).grokbot_agent_name,'Other Example Bot');
  assert.equal((await listAgents(f.app,owner)).find(x=>x.handle==='dev.grokbot').grokbot_agent_name,'Other Example Bot');
@@ -144,7 +144,7 @@ test('cursor_key_set replaces the stored key; cursor_key_clear unbinds it',async
  assert.equal(await f.app.store.get('cursor_key',owner),undefined);
  const failed=await f.g.send(f.a,{to:'dev.grokbot',text:'after clear',request_id:'message-031'});
  assert.equal(failed.status,'delivery_failed');
- assert.equal(failed.errors[0].code,'cursor_key_unreadable');
+ assert.equal(failed.errors[0].code,'cursor_key_required');
  assert.match(failed.errors[0].action,/cursor_key_set|agent_register/);
  assert(!leak(failed,CURSOR_KEY));assert(!leak(failed,next));
 });
@@ -186,6 +186,14 @@ test('grokbotSession and grokbotMessage classify outcomes without leaking the ke
   return true;
  });
 
+});
+test('registering a Grok destination without a stored key returns cursor_key_required',async()=>{
+ const app=new App({store:new MemoryStore(),instanceKey:'x'.repeat(64),key:Buffer.alloc(32,7).toString('base64'),origin:'https://mcp.example',grokbotFetch:mockGrokbot().fetchImpl});
+ await assert.rejects(registerAgent(app,root,{handle:'needs-key',grokbot_agent_name:'Needs Key'}),e=>{
+  assert.equal(e.relayCode,'cursor_key_required');assert.equal(e.status,409);
+  assert.match(e.message,/no stored Cursor API key/i);
+  return true;
+ });
 });
 test('setCursorKey and clearCursorKey are MCP tools and never return the secret',async()=>{
  const f=await fixture();const names=(await f.app.rpc(owner,'tools/list',{},f.b)).tools.map(t=>t.name);
