@@ -63,3 +63,6 @@ Muse uses `muse`, dot `chatgpt`, Grok `grokbot`, humans `user`; unknown historic
 agent platforms remain `agent`. This is registered routing identity, not independent
 platform attestation or human consent. Storage retains the original body, so reads
 do not stack headers. ACK and deduplication still use `message_id`, not text.
+Grok Bot forwards use the same sender header and body without an appended routing
+metadata line. Message IDs returned by `messages_send` and `reply_to_message_id`
+remain unchanged.
