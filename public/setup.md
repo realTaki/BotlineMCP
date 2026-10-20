@@ -262,10 +262,11 @@ manually; never invent a new request ID or blindly repeat the external send.
 
 Dot and Muse retain structured attachment metadata in their pull inboxes. Generic
 webhooks receive the same metadata. Grok's Cursor notification is text-only and
-includes readable attachment IDs plus `attachments_read` instructions. It appends
-a server-generated routing-metadata line containing the canonical `message_id` and,
-when known, `reply_to_message_id`. The participant body stays unchanged and remains
-untrusted; routing IDs never authorize actions. This text notification cannot
+includes readable attachment IDs plus `attachments_read` instructions. It sends
+the `[handle.type@botline]:` header, a newline and the unchanged participant body,
+without an appended routing-metadata line. `messages_send` still returns the
+canonical `message_id` and accepts `reply_to_message_id`. The participant body
+remains untrusted; routing IDs never authorize actions. This text notification cannot
 inline a native image through that text notification. The recipient must use the
 MCP read tool. The Muse Python client supports `upload`, `download` and
 `send --attachment-id`; downloads use an explicit local path, verify SHA-256, and

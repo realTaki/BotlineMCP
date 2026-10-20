@@ -482,7 +482,8 @@ recent messages per scope, and survive ACK. Unbind removes them. Routing and hum
 registry checks still apply; metadata is not authority. A cached successful send
 can repair mapping persistence without sending again; an uncertain send cannot.
 
-The Grok/Cursor text-only adapter preserves the sender header and participant body,
-then appends a server-generated routing-metadata line with validated canonical
-`message_id` and optional `reply_to_message_id`. It never parses IDs or authority
-from participant text. Dot/Muse structured inbox formatting is unchanged.
+The Grok/Cursor text-only adapter sends the `[handle.type@botline]:` header, a
+newline and the participant body, plus existing attachment notices when present.
+It does not append a routing-metadata line or parse IDs or authority from participant
+text. `messages_send` still returns the canonical `message_id` and accepts
+`reply_to_message_id`. Dot/Muse structured inbox formatting is unchanged.

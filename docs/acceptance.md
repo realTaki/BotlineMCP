@@ -130,6 +130,8 @@ single-connection locking and cleanup. Production deployment and live Telegram
 voice/reply acceptance are separate stages; no real messages are sent by these
 mocked tests.
 
-Grok/Cursor adapter snapshots check that canonical routing IDs survive text-only
-forwarding while original body bytes and sender identity remain unchanged; forged
-body metadata and invalid event IDs do not become server routing metadata.
+Grok/Cursor adapter tests check that forwards contain the sender header and original
+body without an appended routing-metadata line, even when canonical message and
+reply IDs are present. Footer-like participant text stays unchanged. Mocked session
+API tests cover agent and Telegram inputs, stable delivery IDs, repeated-send
+deduplication and replies retaining structured canonical IDs on webhook delivery.
